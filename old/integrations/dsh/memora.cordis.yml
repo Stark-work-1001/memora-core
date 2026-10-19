@@ -1,0 +1,31 @@
+# TEMPLATE. The managed block below is rendered into a DSH profile by
+# tools/dsh_profile.py, which substitutes the real paths on the target machine.
+# The values shown here are placeholders, not usable paths.
+# BEGIN MEMORA MANAGED INTEGRATION
+- insert:
+    - id: memory-memora
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: memora
+        transport: stdio
+        command: "<project root>/.venv/Scripts/python.exe"
+        args: ['-m', 'memora', '--data', "<project root>/data", 'mcp']
+        cwd: "<project root>"
+        env:
+          PYTHONUTF8: '1'
+          MEMORA_RUNTIME_VERSION: '1.3.0'
+          TEMP: "<project root>/runtime/tmp"
+          TMP: "<project root>/runtime/tmp"
+        toolCallTimeoutMs: 180000
+        failOnStartupError: false
+    - id: memora-lifecycle
+      name: "<project root>/runtime/dsh/adapters/memora-plugin-152e833acfd50774.mjs"
+      config:
+        project: dsh
+        adapterRevision: '152e833acfd50774'
+        url: 'http://127.0.0.1:18184/mcp'
+        tokenFile: "<project root>/data/mcp-token"
+        outbox: "<project root>/data/integrations/dsh-outbox"
+        llmModule: "<plugin dir>/dsh-mnemon/node_modules/@deepseek-ai/dsh-llm/lib/index.js"
+        startScript: "<project root>/start-memora.ps1"
+# END MEMORA MANAGED INTEGRATION

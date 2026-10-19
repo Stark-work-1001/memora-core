@@ -1,0 +1,50 @@
+{
+  // First-party frontend sources.
+  //
+  // Compiler options mirror frontend/tsconfig.dag.json verbatim so the two
+  // projects cannot drift; keep them in sync when either changes.
+  //
+  // vendor/** is excluded on purpose: the two vendored trees carry their own
+  // tsconfig.json and are built by a separate esbuild/Vite pipeline that
+  // supplies `virtual:*` modules and __PLUGIN_*__ globals at bundle time
+  // (see frontend/build.mjs). Those symbols do not exist for tsc, so checking
+  // vendor code here would only report errors we must not fix.
+  //
+  // dictionary.ts and outline.ts are excluded for the same reason: they are
+  // 7-line esbuild entry stubs whose only link to the outside world is
+  // `import { ... } from './vendor/*/standalone/src/app'`. TypeScript follows
+  // imports regardless of `exclude`, so including them would drag all of
+  // vendor/** back into this program. The debt is tracked here rather than
+  // fixed by editing vendor or stubbing the virtual modules.
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "exactOptionalPropertyTypes": false,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "noEmit": true,
+    "types": []
+  },
+  "include": [
+    "*.ts"
+  ],
+  "exclude": [
+    "vendor",
+    "node_modules",
+    "dictionary.ts",
+    "outline.ts"
+  ]
+}

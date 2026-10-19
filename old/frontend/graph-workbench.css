@@ -1,0 +1,48 @@
+/* Original Memora controls and repairs for the copied standalone graph hosts. */
+.sa-root{position:relative}
+.sa-root.panel-right .sa-panel{top:var(--memora-chrome-height,112px)}
+.sa-root.panel-right.has-selection .sa-stage{margin-right:calc(min(380px,42%) + 24px)}
+.sa-panel-title{font-size:20px;line-height:1.35;overflow-wrap:anywhere}
+.sa-panel-description[hidden]{display:none}
+.memora-graph-controls{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--sa-bg);border-bottom:1px solid var(--sa-line);z-index:5;flex-wrap:wrap}
+.memora-graph-controls button,.memora-graph-controls select{border:1px solid var(--sa-line);background:var(--sa-panel);color:var(--sa-ink);padding:8px 12px;border-radius:8px;cursor:pointer;font:inherit;font-size:12px}
+.memora-graph-controls button[aria-pressed=true]{background:#dce9df;border-color:#90b59f}
+.memora-graph-search{position:relative;min-width:210px;flex:0 1 330px}
+.memora-graph-search input{box-sizing:border-box;width:100%;border:1px solid var(--sa-line);background:var(--sa-panel);color:var(--sa-ink);border-radius:8px;padding:10px 62px 10px 12px;outline-offset:2px;font:inherit;font-size:13px}
+.memora-graph-match-count{position:absolute;right:28px;top:12px;font-size:10px;color:var(--sa-muted);pointer-events:none}
+.memora-graph-results{position:absolute;top:calc(100% + 6px);left:0;width:min(450px,85vw);max-height:350px;overflow:auto;border:1px solid var(--sa-line);box-shadow:0 12px 35px #18362b22;background:var(--sa-panel);border-radius:10px;padding:5px}
+.memora-graph-results[hidden]{display:none}
+.memora-graph-results button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:10px}
+.memora-graph-results button:hover,.memora-graph-results [aria-selected=true]{background:#edf3ed}
+.memora-graph-results strong,.memora-graph-results small{display:block;white-space:normal}
+.memora-graph-results small{font-size:11px;color:var(--sa-muted);margin-top:5px;line-height:1.5}
+.memora-graph-results p{font-size:12px;padding:8px;color:var(--sa-muted)}
+.memora-graph-help{font-size:11px;color:var(--sa-muted);margin-left:auto}
+.sa-actions{overflow-x:auto;scrollbar-width:thin}
+.sa-tabs{display:none}.sa-brand{min-width:120px}.sa-brand-name{max-width:200px}
+.dg-label{max-width:240px;overflow:hidden;text-overflow:ellipsis;border-radius:4px;padding:2px 4px}
+.dg-label:focus-visible{outline:2px solid var(--sa-accent)}
+.dg-label.is-selected{background:#e5eee2}
+.mm-stage{cursor:grab}.mm-stage:focus-visible{outline:2px solid var(--sa-accent);outline-offset:-3px}
+.om3d-canvas{display:block;width:100%;height:100%}
+.om3d-labels{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1}
+.om3d-label{position:absolute;top:0;left:0;max-width:240px;white-space:nowrap;line-height:1.45;font-size:13px;color:#243c33;text-shadow:0 1px 3px #f7f7f5,0 0 5px #f7f7f5;transform-origin:center bottom;cursor:pointer;padding:2px 4px;border-radius:4px;pointer-events:auto}
+.om3d-label-text{display:inline-block;max-width:230px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.om3d-label:not(.is-shown){pointer-events:none}
+.om3d-label[data-state=selected]{background:#e0ebdf;font-weight:700;outline:1px solid #8bae94}
+.om3d-label[data-state=hover],.om3d-label:focus-visible{outline:2px solid #80a88b;background:#edf3ed}
+.om3d-note-dot{display:inline-block;width:4px;height:4px;border-radius:50%;background:#6e9679;margin-left:3px;vertical-align:middle}
+.om3d-code{background:#dae6dd;border-radius:3px;padding:0 3px}
+.mm-inspector{display:none;flex-basis:290px}.mm-root.has-selection .mm-inspector{display:block}
+.mm-outline{flex-basis:220px}.mm-title{overflow-wrap:anywhere;font-size:18px}
+.mm-note{overflow-wrap:anywhere}.mm-note blockquote{margin:8px 0;padding-left:10px;border-left:2px solid #a6bcac}
+.mm-chips button{border:1px solid var(--sa-line);background:var(--sa-bg);color:var(--sa-ink);border-radius:6px;padding:5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:760px){.sa-bar{flex-wrap:wrap;gap:4px}.sa-brand{min-width:90px}.sa-actions{width:100%;margin:0}.memora-graph-help{display:none}.memora-graph-controls{gap:6px;padding:8px}.memora-graph-search{flex:1 1 180px}.mm-row{position:relative}.mm-root.has-selection .mm-inspector{position:absolute;right:8px;bottom:10px;width:min(280px,65vw);max-height:45%;z-index:4;border:1px solid var(--sa-line);border-radius:10px;box-shadow:0 8px 30px #18362b22}.mm-outline{flex-basis:150px}}
+@media(max-width:860px){.sa-root.panel-right .sa-panel{top:auto}.sa-root.panel-right.has-selection .sa-stage{margin-right:0}.sa-root:not(.mm-root).has-selection .sa-stage{margin-bottom:220px}.sa-root.panel-bottom .sa-panel,.sa-root.panel-right .sa-panel{height:210px}}
+/* Parent -> child direction cue for the hierarchy view. The copied renderer's
+ * own edge pulse is a narrow band mixed into an already-faint line, which
+ * measures as a near-zero pixel change frame to frame; this overlay draws the
+ * direction explicitly instead (chevrons at the child end, dots travelling
+ * parent to child). It sits above the canvas and below the labels, and never
+ * takes pointer events. */
+.memora-flow{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2}

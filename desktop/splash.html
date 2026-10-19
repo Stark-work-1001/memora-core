@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>记忆中枢</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --fg: #e6f2f8;
+    --muted: #7d90a0;
+    --cyan: #38e1ff;
+    --violet: #7c5cff;
+    --edge: rgba(120, 180, 220, .18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(56, 225, 255, .10), transparent 60%),
+      radial-gradient(90% 70% at 50% 110%, rgba(124, 92, 255, .12), transparent 60%),
+      var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    overflow: hidden;
+    position: relative;
+  }
+  body::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--edge);
+    pointer-events: none;
+  }
+  .mark { width: 76px; height: 76px; margin-bottom: 18px; animation: breathe 2.6s ease-in-out infinite; }
+  .mark circle, .mark path { vector-effect: non-scaling-stroke; }
+  .title { font-size: 17px; letter-spacing: .12em; font-weight: 600; }
+  .subtitle { margin-top: 6px; font-size: 12px; color: var(--muted); letter-spacing: .18em; text-transform: uppercase; }
+  .status { margin-top: 26px; font-size: 13px; color: #b8cbd8; min-height: 20px; text-align: center; max-width: 400px; }
+  .detail {
+    margin-top: 6px; font-size: 11px; color: var(--muted); font-family: "Consolas", monospace;
+    max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
+  }
+  .bar { margin-top: 22px; width: 260px; height: 3px; border-radius: 3px; background: rgba(120, 180, 220, .14); overflow: hidden; }
+  .bar > i {
+    display: block; height: 100%; width: 40%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--cyan), var(--violet));
+    animation: slide 1.6s cubic-bezier(.45, .05, .55, .95) infinite;
+  }
+  @keyframes slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(360%); } }
+  @keyframes breathe { 0%, 100% { opacity: .82; transform: scale(1); } 50% { opacity: 1; transform: scale(1.045); } }
+</style>
+</head>
+<body>
+  <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#38e1ff"/>
+        <stop offset="100%" stop-color="#7c5cff"/>
+      </linearGradient>
+    </defs>
+    <circle cx="50" cy="50" r="30" fill="none" stroke="url(#g)" stroke-width="3.5" opacity=".9"/>
+    <circle cx="50" cy="50" r="16" fill="none" stroke="url(#g)" stroke-width="1.4" opacity=".5"/>
+    <circle cx="50" cy="50" r="9" fill="url(#g)" opacity=".95"/>
+    <circle cx="50" cy="20" r="3.4" fill="url(#g)"/>
+    <circle cx="76" cy="65" r="3.4" fill="url(#g)"/>
+    <circle cx="24" cy="65" r="3.4" fill="url(#g)"/>
+  </svg>
+  <div class="title">记忆中枢</div>
+  <div class="subtitle">memora-core</div>
+  <div class="status" id="status">正在启动记忆中枢…</div>
+  <div class="detail" id="detail"></div>
+  <div class="bar"><i></i></div>
+<script>
+  window.memoraSetStatus = function (text, detail) {
+    if (typeof text === 'string' && text) document.getElementById('status').textContent = text;
+    if (typeof detail === 'string') document.getElementById('detail').textContent = detail;
+  };
+</script>
+</body>
+</html>

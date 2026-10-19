@@ -1,0 +1,10 @@
+{
+  "extract": "你是记忆提炼器。从下面的会话片段中，抽取可长期复用的记忆条目。\n规则：\n1) 每条必须是单一命题；\n2) 必须给出原文中的**精确引句**作为证据，不得改写引句；\n3) 智能体自述而未经验证的内容，trust 不得高于 0.5；\n4) 用户明确表达的偏好优先保留；\n5) 输出 JSON 数组，字段：title, body, kind, category, importance, confidence, quote。\n会话片段：\n{{chunk}}",
+  "classify": "把记忆归入以下 kind 之一：fact, knowledge, decision, preference, procedure, experience, task, tool, turn, artifact。并给出 category（领域）与 0-1 的重要度。只输出 JSON：{kind, category, importance, reason}。记忆：\n{{body}}",
+  "dedup_judge": "比较“新记忆”与“已有记忆”，判定应采取的动作：\nadd（全新）、update（同义但更完整）、supersede（新版本取代旧版本）、merge（互补且同主题）、link（相关但独立）、noop（完全重复）、ask（证据不足需人工）。\n必须给出理由与置信度。只输出 JSON：{action, target_id, confidence, reason, merged_body?}。\n新记忆：{{new}}\n已有记忆：{{old}}",
+  "verify": "检查这条候选记忆的每条断言是否都有原文引句支撑。没有支撑的断言必须列在 unsupported 中。只输出 JSON：{supported:[], unsupported:[], verdict:'pass'|'fail'}。\n候选：{{candidate}}\n引句池：{{quotes}}",
+  "conflict": "两条记忆矛盾时，逐项比对：实体、数值、极性、时间、来源可信度。给出更可信的一方与理由，或建议人工裁决。只输出 JSON：{preferred:'a'|'b'|'ask', reasons:[], confidence}。",
+  "digest": "为智能体生成记忆摘要包：保留可执行的事实、约束与偏好，去掉过程性冗余。每条必须带编号引用。预算 {{budget}} tokens。",
+  "quiz": "基于给定已审核知识出 {{count}} 道题，覆盖定义/特征/公式/推导。不得引入知识之外的断言。输出 JSON 数组：{type, question, options?, answer, explanation, source_id}。",
+  "abstraction": "为下面的细节生成 2-4 条可检索的抽象线索（问句式），线索必须能在不看到原文的情况下指向该细节。只输出 JSON：{cues:[]}。"
+}

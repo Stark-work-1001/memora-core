@@ -1,0 +1,1980 @@
+[
+  {
+    "id": "session-distill",
+    "name": "智能体会话沉淀",
+    "category": "ingest",
+    "version": 2,
+    "description": "把一次智能体会话（任务描述、分析、工具调用、结论）提炼成候选记忆，经判重、来源核验与判定层后沉淀为已审核记忆，并写入按日期的 Markdown。",
+    "trigger": {
+      "kind": "session-end",
+      "sources": [
+        "agent_session"
+      ]
+    },
+    "inputs": {
+      "session": "会话对象",
+      "scope": "作用域路径",
+      "agent": "智能体 id"
+    },
+    "nodes": [
+      {
+        "id": "capture",
+        "name": "接收会话",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "normalize",
+        "name": "归一化与分片",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "chunk_tokens": 900,
+          "overlap": 120
+        }
+      },
+      {
+        "id": "extract",
+        "name": "候选记忆提炼",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "quote_required": true
+        }
+      },
+      {
+        "id": "classify",
+        "name": "类型与领域分类",
+        "kind": "classify",
+        "role": "judge",
+        "params": {
+          "kinds": [
+            "fact",
+            "knowledge",
+            "decision",
+            "preference",
+            "procedure",
+            "experience",
+            "task",
+            "tool"
+          ]
+        }
+      },
+      {
+        "id": "dedup_recall",
+        "name": "相似旧记忆召回",
+        "kind": "retrieve",
+        "role": "embedding",
+        "params": {
+          "top_k": 12,
+          "min_score": 0.55
+        }
+      },
+      {
+        "id": "dedup_judge",
+        "name": "重复/冲突判定",
+        "kind": "judge",
+        "role": "judge",
+        "params": {
+          "actions": [
+            "add",
+            "update",
+            "supersede",
+            "merge",
+            "link",
+            "noop",
+            "ask"
+          ]
+        }
+      },
+      {
+        "id": "verify_source",
+        "name": "来源核验",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "require_quote": true,
+          "reject_agent_only_claims": true
+        }
+      },
+      {
+        "id": "persist",
+        "name": "沉淀入 SQLite",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "status": "approved"
+        }
+      },
+      {
+        "id": "mirror",
+        "name": "写入日期 Markdown",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "target": "markdown",
+          "layout": "daily"
+        }
+      },
+      {
+        "id": "index",
+        "name": "增量索引",
+        "kind": "index",
+        "role": "embedding",
+        "params": {
+          "incremental": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "capture",
+        "to": "normalize",
+        "when": "always"
+      },
+      {
+        "from": "normalize",
+        "to": "extract",
+        "when": "always"
+      },
+      {
+        "from": "extract",
+        "to": "classify",
+        "when": "always"
+      },
+      {
+        "from": "classify",
+        "to": "dedup_recall",
+        "when": "always"
+      },
+      {
+        "from": "dedup_recall",
+        "to": "dedup_judge",
+        "when": "always"
+      },
+      {
+        "from": "dedup_judge",
+        "to": "verify_source",
+        "when": "always"
+      },
+      {
+        "from": "verify_source",
+        "to": "persist",
+        "when": "always"
+      },
+      {
+        "from": "persist",
+        "to": "mirror",
+        "when": "always"
+      },
+      {
+        "from": "mirror",
+        "to": "index",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "extract": "rule-extract",
+      "classify": "rule-classify",
+      "dedup_judge": "score-threshold",
+      "verify_source": "quote-check-only"
+    }
+  },
+  {
+    "id": "study-notes-review",
+    "name": "学习笔记与复习",
+    "category": "learn",
+    "version": 2,
+    "description": "把笔记拆成定义/定理/特征/公式/推导/例题六层，生成复习卡片与到期计划（SM-2），并按艾宾浩斯式间隔提醒复习。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "document",
+        "memory"
+      ]
+    },
+    "inputs": {
+      "text": "笔记正文或文档 id"
+    },
+    "nodes": [
+      {
+        "id": "ingest",
+        "name": "读取笔记",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "segment",
+        "name": "结构化切分",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "headings": true,
+          "math": true
+        }
+      },
+      {
+        "id": "didactic",
+        "name": "教学分层抽取",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "layers": [
+            "definition",
+            "theorem",
+            "property",
+            "formula",
+            "derivation",
+            "example"
+          ]
+        }
+      },
+      {
+        "id": "formula_latex",
+        "name": "公式转 LaTeX",
+        "kind": "transform",
+        "role": "extractor",
+        "params": {
+          "output": "katex"
+        }
+      },
+      {
+        "id": "link_entities",
+        "name": "概念实体与先修关系",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "rels": [
+            "prerequisite",
+            "hypernym",
+            "part_of"
+          ]
+        }
+      },
+      {
+        "id": "cards",
+        "name": "生成复习卡",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "algorithm": "SM-2"
+        }
+      },
+      {
+        "id": "schedule",
+        "name": "计算到期时间",
+        "kind": "schedule",
+        "role": null,
+        "params": {
+          "algorithm": "sm2",
+          "ease": 2.5
+        }
+      },
+      {
+        "id": "persist",
+        "name": "落库并镜像",
+        "kind": "persist",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "ingest",
+        "to": "segment",
+        "when": "always"
+      },
+      {
+        "from": "segment",
+        "to": "didactic",
+        "when": "always"
+      },
+      {
+        "from": "didactic",
+        "to": "formula_latex",
+        "when": "always"
+      },
+      {
+        "from": "formula_latex",
+        "to": "link_entities",
+        "when": "always"
+      },
+      {
+        "from": "link_entities",
+        "to": "cards",
+        "when": "always"
+      },
+      {
+        "from": "cards",
+        "to": "schedule",
+        "when": "always"
+      },
+      {
+        "from": "schedule",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "didactic": "heading-based-split",
+      "formula_latex": "keep-source-tex",
+      "cards": "cloze-from-text"
+    }
+  },
+  {
+    "id": "doc-knowledgeize",
+    "name": "外部文档知识化",
+    "category": "ingest",
+    "version": 2,
+    "description": "吸收 Markdown/PDF/TXT/HTML/JSONL 外部文档：切块、摘要、抽实体、建关系、写入文档库并纳入检索，保留原始出处哈希。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "file",
+        "folder"
+      ]
+    },
+    "inputs": {
+      "path": "文件或目录",
+      "scope": "目标作用域"
+    },
+    "nodes": [
+      {
+        "id": "read",
+        "name": "读取文档",
+        "kind": "input",
+        "role": null,
+        "params": {
+          "formats": [
+            "md",
+            "txt",
+            "pdf",
+            "html",
+            "json",
+            "jsonl"
+          ]
+        }
+      },
+      {
+        "id": "dedupe_file",
+        "name": "文档级去重",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "by": "content_hash"
+        }
+      },
+      {
+        "id": "chunk",
+        "name": "语义切块",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "tokens": 900,
+          "overlap": 120,
+          "keep_headings": true
+        }
+      },
+      {
+        "id": "summarize",
+        "name": "分块摘要",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "max_tokens": 180
+        }
+      },
+      {
+        "id": "entities",
+        "name": "实体抽取",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "kinds": [
+            "concept",
+            "person",
+            "project",
+            "tool",
+            "term"
+          ]
+        }
+      },
+      {
+        "id": "relations",
+        "name": "关系抽取",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "rels": [
+            "hypernym",
+            "hyponym",
+            "part_of",
+            "causes",
+            "supports"
+          ]
+        }
+      },
+      {
+        "id": "embed",
+        "name": "向量化",
+        "kind": "embed",
+        "role": "embedding",
+        "params": {}
+      },
+      {
+        "id": "index_fts",
+        "name": "全文索引",
+        "kind": "index",
+        "role": null,
+        "params": {
+          "engine": "fts5",
+          "tokenize": "unicode61"
+        }
+      },
+      {
+        "id": "persist",
+        "name": "写入文档库",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "mirror": "markdown"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "read",
+        "to": "dedupe_file",
+        "when": "always"
+      },
+      {
+        "from": "dedupe_file",
+        "to": "chunk",
+        "when": "always"
+      },
+      {
+        "from": "chunk",
+        "to": "summarize",
+        "when": "always"
+      },
+      {
+        "from": "summarize",
+        "to": "entities",
+        "when": "always"
+      },
+      {
+        "from": "entities",
+        "to": "relations",
+        "when": "always"
+      },
+      {
+        "from": "relations",
+        "to": "embed",
+        "when": "always"
+      },
+      {
+        "from": "embed",
+        "to": "index_fts",
+        "when": "always"
+      },
+      {
+        "from": "index_fts",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "summarize": "lead-sentences",
+      "entities": "capitalized-noun-phrase",
+      "relations": "cooccurrence-window",
+      "embed": "char-ngram-hash"
+    }
+  },
+  {
+    "id": "hybrid-recall-rerank",
+    "name": "混合召回与重排序",
+    "category": "recall",
+    "version": 3,
+    "description": "BM25 + 向量 + 实体图三路召回，RRF 融合，cross-encoder 重排，MMR 去冗余，最后按 token 预算打包成上下文，附引用与降级标记。",
+    "trigger": {
+      "kind": "agent",
+      "sources": [
+        "query"
+      ]
+    },
+    "inputs": {
+      "query": "检索语句",
+      "scope": "作用域",
+      "budget": "token 预算"
+    },
+    "nodes": [
+      {
+        "id": "query_parse",
+        "name": "查询解析",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "extract_filters": true
+        }
+      },
+      {
+        "id": "bm25",
+        "name": "全文召回",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "engine": "fts5",
+          "top_k": 40
+        }
+      },
+      {
+        "id": "vector",
+        "name": "向量召回",
+        "kind": "retrieve",
+        "role": "embedding",
+        "params": {
+          "top_k": 40
+        }
+      },
+      {
+        "id": "graph",
+        "name": "实体图扩展召回",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "engine": "graph",
+          "hops": 1,
+          "top_k": 20
+        }
+      },
+      {
+        "id": "fuse",
+        "name": "RRF 融合",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "algorithm": "rrf",
+          "k": 60,
+          "weights": {
+            "bm25": 1.0,
+            "vector": 1.0,
+            "graph": 0.6
+          }
+        }
+      },
+      {
+        "id": "rerank",
+        "name": "精排",
+        "kind": "rerank",
+        "role": "reranker",
+        "params": {
+          "top_k": 20
+        }
+      },
+      {
+        "id": "mmr",
+        "name": "去冗余",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "algorithm": "mmr",
+          "lambda_": 0.7
+        }
+      },
+      {
+        "id": "pack",
+        "name": "预算打包",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "algorithm": "greedy-budget",
+          "cite": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "query_parse",
+        "to": "bm25",
+        "when": "always"
+      },
+      {
+        "from": "query_parse",
+        "to": "vector",
+        "when": "always"
+      },
+      {
+        "from": "query_parse",
+        "to": "graph",
+        "when": "always"
+      },
+      {
+        "from": "bm25",
+        "to": "fuse",
+        "when": "always"
+      },
+      {
+        "from": "vector",
+        "to": "fuse",
+        "when": "always"
+      },
+      {
+        "from": "graph",
+        "to": "fuse",
+        "when": "always"
+      },
+      {
+        "from": "fuse",
+        "to": "rerank",
+        "when": "always"
+      },
+      {
+        "from": "rerank",
+        "to": "mmr",
+        "when": "always"
+      },
+      {
+        "from": "mmr",
+        "to": "pack",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "vector": "bm25-only",
+      "graph": "skip",
+      "rerank": "score-passthrough"
+    }
+  },
+  {
+    "id": "conflict-source-audit",
+    "name": "冲突与来源审计",
+    "category": "audit",
+    "version": 2,
+    "description": "扫描互斥记忆与低信任来源，按证据强度、时间、来源类型排序，产出审计报告与建议动作，人工裁决后写回。",
+    "trigger": {
+      "kind": "schedule",
+      "cron": "0 3 * * *"
+    },
+    "inputs": {
+      "scope": "作用域",
+      "since": "时间窗"
+    },
+    "nodes": [
+      {
+        "id": "collect",
+        "name": "收集候选对",
+        "kind": "input",
+        "role": null,
+        "params": {
+          "strategy": "entity-overlap + vector-near"
+        }
+      },
+      {
+        "id": "score_conflict",
+        "name": "冲突打分",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "algorithm": "conflict-score"
+        }
+      },
+      {
+        "id": "evidence_rank",
+        "name": "证据强度排序",
+        "kind": "judge",
+        "role": "judge",
+        "params": {
+          "rubric": "source-trust"
+        }
+      },
+      {
+        "id": "report",
+        "name": "生成审计报告",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "output": "markdown+json"
+        }
+      },
+      {
+        "id": "propose",
+        "name": "建议动作",
+        "kind": "decide",
+        "role": null,
+        "params": {
+          "actions": [
+            "supersede",
+            "merge",
+            "mark_stale",
+            "ask_user"
+          ]
+        }
+      },
+      {
+        "id": "persist",
+        "name": "写入冲突表与报告文档",
+        "kind": "persist",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "collect",
+        "to": "score_conflict",
+        "when": "always"
+      },
+      {
+        "from": "score_conflict",
+        "to": "evidence_rank",
+        "when": "always"
+      },
+      {
+        "from": "evidence_rank",
+        "to": "report",
+        "when": "always"
+      },
+      {
+        "from": "report",
+        "to": "propose",
+        "when": "always"
+      },
+      {
+        "from": "propose",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "evidence_rank": "trust-weight-order",
+      "report": "template-report"
+    }
+  },
+  {
+    "id": "project-retro",
+    "name": "项目决策与经验复盘",
+    "category": "learn",
+    "version": 2,
+    "description": "从会话与提交记录中抽取决策（背景/选项/取舍/结果），沉淀为可复用的经验条目并关联工作区。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "agent_session",
+        "workspace"
+      ]
+    },
+    "inputs": {
+      "workspace": "工作区路径",
+      "window": "时间窗"
+    },
+    "nodes": [
+      {
+        "id": "gather",
+        "name": "汇集素材",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "decision_extract",
+        "name": "决策抽取",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "fields": [
+            "context",
+            "options",
+            "choice",
+            "rationale",
+            "outcome",
+            "reusable_lesson"
+          ]
+        }
+      },
+      {
+        "id": "outcome_verify",
+        "name": "结果核验",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "by": "tool_output_or_user_confirm"
+        }
+      },
+      {
+        "id": "lessons",
+        "name": "经验条目化",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "kind": "experience"
+        }
+      },
+      {
+        "id": "link",
+        "name": "关联工作区与任务",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "rels": [
+            "derived_from",
+            "supports"
+          ]
+        }
+      },
+      {
+        "id": "persist",
+        "name": "沉淀",
+        "kind": "persist",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "gather",
+        "to": "decision_extract",
+        "when": "always"
+      },
+      {
+        "from": "decision_extract",
+        "to": "outcome_verify",
+        "when": "always"
+      },
+      {
+        "from": "outcome_verify",
+        "to": "lessons",
+        "when": "always"
+      },
+      {
+        "from": "lessons",
+        "to": "link",
+        "when": "always"
+      },
+      {
+        "from": "link",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "decision_extract": "keyword-time-slice"
+    }
+  },
+  {
+    "id": "detail-abstraction",
+    "name": "细节与抽象线索",
+    "category": "transform",
+    "version": 2,
+    "description": "把原始细节与抽象线索分离：细节保真留存，抽象生成可检索的 cue（线索），检索时线索命中细节，降低遗忘与错配。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "memory",
+        "document"
+      ]
+    },
+    "inputs": {
+      "items": "记忆或文档块列表"
+    },
+    "nodes": [
+      {
+        "id": "load",
+        "name": "载入原始细节",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "abstract",
+        "name": "生成抽象线索",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "style": "cue-question"
+        }
+      },
+      {
+        "id": "keep_detail",
+        "name": "细节原样留存",
+        "kind": "transform",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "pair",
+        "name": "线索-细节配对",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "rel": "cue_of"
+        }
+      },
+      {
+        "id": "cues_index",
+        "name": "线索索引",
+        "kind": "index",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "load",
+        "to": "abstract",
+        "when": "always"
+      },
+      {
+        "from": "abstract",
+        "to": "keep_detail",
+        "when": "always"
+      },
+      {
+        "from": "keep_detail",
+        "to": "pair",
+        "when": "always"
+      },
+      {
+        "from": "pair",
+        "to": "cues_index",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "abstract": "title-as-cue"
+    }
+  },
+  {
+    "id": "incremental-index",
+    "name": "增量索引维护",
+    "category": "maintain",
+    "version": 2,
+    "description": "监听库内变更，只对新增/变更对象重建 FTS 与向量，清理孤儿向量，保证索引与真源一致。",
+    "trigger": {
+      "kind": "schedule",
+      "cron": "*/10 * * * *"
+    },
+    "inputs": {
+      "since": "上次水位"
+    },
+    "nodes": [
+      {
+        "id": "diff",
+        "name": "变更检测",
+        "kind": "input",
+        "role": null,
+        "params": {
+          "by": [
+            "updated_at",
+            "hash"
+          ]
+        }
+      },
+      {
+        "id": "reindex_fts",
+        "name": "FTS 重建",
+        "kind": "index",
+        "role": null,
+        "params": {
+          "engine": "fts5"
+        }
+      },
+      {
+        "id": "reindex_vec",
+        "name": "向量增量",
+        "kind": "embed",
+        "role": "embedding",
+        "params": {
+          "incremental": true
+        }
+      },
+      {
+        "id": "gc",
+        "name": "孤儿清理",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "rules": [
+            "missing_owner",
+            "hash_mismatch",
+            "dim_mismatch"
+          ]
+        }
+      },
+      {
+        "id": "report",
+        "name": "索引健康报告",
+        "kind": "generate",
+        "role": "chat",
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "diff",
+        "to": "reindex_fts",
+        "when": "always"
+      },
+      {
+        "from": "reindex_fts",
+        "to": "reindex_vec",
+        "when": "always"
+      },
+      {
+        "from": "reindex_vec",
+        "to": "gc",
+        "when": "always"
+      },
+      {
+        "from": "gc",
+        "to": "report",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "reindex_vec": "mark-degraded-keep-old"
+    }
+  },
+  {
+    "id": "dedup-merge",
+    "name": "新记忆去重与合并",
+    "category": "judge",
+    "version": 3,
+    "description": "新记忆入库前的核心闸门：近似召回旧记忆 → 打分分层（自动合并/进入判定/新建）→ 判定层给出 ADD/UPDATE/MERGE/SUPERSEDE/LINK/NOOP/ASK，并保留被合并来源。",
+    "trigger": {
+      "kind": "ingest",
+      "sources": [
+        "candidate"
+      ]
+    },
+    "inputs": {
+      "candidate": "候选记忆"
+    },
+    "nodes": [
+      {
+        "id": "candidate_in",
+        "name": "候选接收",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "near_dup",
+        "name": "近似召回",
+        "kind": "retrieve",
+        "role": "embedding",
+        "params": {
+          "top_k": 10,
+          "methods": [
+            "cosine",
+            "simhash",
+            "jaccard"
+          ]
+        }
+      },
+      {
+        "id": "band",
+        "name": "分层打分",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "bands": {
+            "auto_merge": 0.92,
+            "judge": 0.8,
+            "new": 0.0
+          }
+        }
+      },
+      {
+        "id": "judge",
+        "name": "判定层裁决",
+        "kind": "judge",
+        "role": "judge",
+        "params": {
+          "actions": [
+            "add",
+            "update",
+            "supersede",
+            "merge",
+            "link",
+            "noop",
+            "ask"
+          ]
+        }
+      },
+      {
+        "id": "merge_write",
+        "name": "合并写回",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "keep_sources": true,
+          "keep_history": true
+        }
+      },
+      {
+        "id": "audit",
+        "name": "审计留痕",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "table": "audit"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "candidate_in",
+        "to": "near_dup",
+        "when": "always"
+      },
+      {
+        "from": "near_dup",
+        "to": "band",
+        "when": "always"
+      },
+      {
+        "from": "band",
+        "to": "judge",
+        "when": "always"
+      },
+      {
+        "from": "judge",
+        "to": "merge_write",
+        "when": "always"
+      },
+      {
+        "from": "merge_write",
+        "to": "audit",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "judge": "score-rule",
+      "near_dup": "fts-near"
+    }
+  },
+  {
+    "id": "update-supersede",
+    "name": "记忆更新与推翻",
+    "category": "judge",
+    "version": 2,
+    "description": "处理迟到事实与版本演进：为新记忆设定生效时间，把旧记忆置为 superseded 并保留历史链，查询默认只返回当前有效版本。",
+    "trigger": {
+      "kind": "ingest",
+      "sources": [
+        "candidate"
+      ]
+    },
+    "inputs": {
+      "candidate": "候选",
+      "valid_from": "生效时间"
+    },
+    "nodes": [
+      {
+        "id": "load_pair",
+        "name": "加载新旧对",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "temporal",
+        "name": "时间关系判定",
+        "kind": "judge",
+        "role": "judge",
+        "params": {
+          "relations": [
+            "before",
+            "after",
+            "overlap",
+            "unknown"
+          ]
+        }
+      },
+      {
+        "id": "supersede",
+        "name": "标记推翻",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "set_fields": [
+            "valid_to",
+            "superseded_by",
+            "status"
+          ]
+        }
+      },
+      {
+        "id": "history",
+        "name": "历史链保留",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "rel": "supersedes"
+        }
+      },
+      {
+        "id": "notify",
+        "name": "变更提示",
+        "kind": "emit",
+        "role": null,
+        "params": {
+          "channel": "review"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "load_pair",
+        "to": "temporal",
+        "when": "always"
+      },
+      {
+        "from": "temporal",
+        "to": "supersede",
+        "when": "always"
+      },
+      {
+        "from": "supersede",
+        "to": "history",
+        "when": "always"
+      },
+      {
+        "from": "history",
+        "to": "notify",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "temporal": "timestamp-order"
+    }
+  },
+  {
+    "id": "split-decompose",
+    "name": "记忆拆解与原子化",
+    "category": "transform",
+    "version": 2,
+    "description": "把长句/复合记忆拆成单一命题的原子记忆，各自可独立检索、独立判真、独立追溯来源。",
+    "trigger": {
+      "kind": "ingest",
+      "sources": [
+        "memory"
+      ]
+    },
+    "inputs": {
+      "memory": "待拆解对象"
+    },
+    "nodes": [
+      {
+        "id": "read",
+        "name": "读取",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "split",
+        "name": "原子化拆解",
+        "kind": "transform",
+        "role": "extractor",
+        "params": {
+          "one_proposition": true
+        }
+      },
+      {
+        "id": "entity_bind",
+        "name": "实体绑定",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "rels": [
+            "mentions"
+          ]
+        }
+      },
+      {
+        "id": "child_links",
+        "name": "父子关系",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "rel": "part_of"
+        }
+      },
+      {
+        "id": "persist",
+        "name": "写回",
+        "kind": "persist",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "read",
+        "to": "split",
+        "when": "always"
+      },
+      {
+        "from": "split",
+        "to": "entity_bind",
+        "when": "always"
+      },
+      {
+        "from": "entity_bind",
+        "to": "child_links",
+        "when": "always"
+      },
+      {
+        "from": "child_links",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "split": "sentence-split"
+    }
+  },
+  {
+    "id": "cross-agent-transfer",
+    "name": "跨智能体记忆分发",
+    "category": "protocol",
+    "version": 2,
+    "description": "把记忆按作用域与策略分发给不同智能体：生成该智能体可读的摘要包（digest），记录谁在何时取走了什么，并支持导出统一交换格式。",
+    "trigger": {
+      "kind": "agent",
+      "sources": [
+        "agent"
+      ]
+    },
+    "inputs": {
+      "agent": "目标智能体",
+      "scope": "作用域",
+      "budget": "token 预算"
+    },
+    "nodes": [
+      {
+        "id": "who",
+        "name": "识别请求方",
+        "kind": "input",
+        "role": null,
+        "params": {
+          "by": [
+            "heartbeat",
+            "mcp_call",
+            "process"
+          ]
+        }
+      },
+      {
+        "id": "scope_resolve",
+        "name": "作用域解析",
+        "kind": "transform",
+        "role": null,
+        "params": {
+          "inherit": [
+            "global",
+            "workspace",
+            "agent"
+          ]
+        }
+      },
+      {
+        "id": "select",
+        "name": "按策略挑选",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "strategy": "hybrid",
+          "top_k": 30
+        }
+      },
+      {
+        "id": "digest",
+        "name": "生成摘要包",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "format": "markdown",
+          "cite": true
+        }
+      },
+      {
+        "id": "export",
+        "name": "导出交换格式",
+        "kind": "emit",
+        "role": null,
+        "params": {
+          "format": "jsonl",
+          "schema": "memora-exchange/1"
+        }
+      },
+      {
+        "id": "log",
+        "name": "分发留痕",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "table": "recall_log"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "who",
+        "to": "scope_resolve",
+        "when": "always"
+      },
+      {
+        "from": "scope_resolve",
+        "to": "select",
+        "when": "always"
+      },
+      {
+        "from": "select",
+        "to": "digest",
+        "when": "always"
+      },
+      {
+        "from": "digest",
+        "to": "export",
+        "when": "always"
+      },
+      {
+        "from": "export",
+        "to": "log",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "digest": "template-digest"
+    }
+  },
+  {
+    "id": "forget-decay",
+    "name": "遗忘与衰减归档",
+    "category": "maintain",
+    "version": 2,
+    "description": "按重要度、最近使用、复习稳定性计算衰减；低价值记忆归档而不删除，敏感记忆走硬删除与审计。",
+    "trigger": {
+      "kind": "schedule",
+      "cron": "30 4 * * *"
+    },
+    "inputs": {
+      "scope": "作用域"
+    },
+    "nodes": [
+      {
+        "id": "candidates",
+        "name": "候选集合",
+        "kind": "input",
+        "role": null,
+        "params": {
+          "strategy": "unused-90d + low-importance"
+        }
+      },
+      {
+        "id": "decay",
+        "name": "衰减打分",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "algorithm": "exponential-decay",
+          "half_life_days": 30
+        }
+      },
+      {
+        "id": "archive",
+        "name": "归档",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "status": "archived"
+        }
+      },
+      {
+        "id": "purge",
+        "name": "硬删除（敏感）",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "require": "explicit_consent",
+          "audit": true
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "candidates",
+        "to": "decay",
+        "when": "always"
+      },
+      {
+        "from": "decay",
+        "to": "archive",
+        "when": "always"
+      },
+      {
+        "from": "archive",
+        "to": "purge",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "decay": "simple-age-rule"
+    }
+  },
+  {
+    "id": "contradiction-investigation",
+    "name": "矛盾调查",
+    "category": "audit",
+    "version": 2,
+    "description": "当两条记忆互斥时，回溯各自证据链、来源可信度与时间，产出一份可读调查报告，由用户或高信任判定层裁决，而不是静默覆盖。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "conflict"
+      ]
+    },
+    "inputs": {
+      "a_id": "记忆 A",
+      "b_id": "记忆 B"
+    },
+    "nodes": [
+      {
+        "id": "trace_a",
+        "name": "取证 A",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "by": "evidence_chain"
+        }
+      },
+      {
+        "id": "trace_b",
+        "name": "取证 B",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "by": "evidence_chain"
+        }
+      },
+      {
+        "id": "compare",
+        "name": "逐项比对",
+        "kind": "judge",
+        "role": "judge",
+        "params": {
+          "rubric": "contradiction"
+        }
+      },
+      {
+        "id": "report",
+        "name": "调查报告",
+        "kind": "generate",
+        "role": "chat",
+        "params": {}
+      },
+      {
+        "id": "decide",
+        "name": "裁决",
+        "kind": "decide",
+        "role": null,
+        "params": {
+          "actions": [
+            "keep_a",
+            "keep_b",
+            "merge",
+            "ask_user"
+          ]
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trace_a",
+        "to": "compare",
+        "when": "always"
+      },
+      {
+        "from": "trace_b",
+        "to": "compare",
+        "when": "always"
+      },
+      {
+        "from": "compare",
+        "to": "report",
+        "when": "always"
+      },
+      {
+        "from": "report",
+        "to": "decide",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "compare": "trust-and-time-order",
+      "report": "template-report"
+    }
+  },
+  {
+    "id": "preference-learning",
+    "name": "用户习惯学习",
+    "category": "learn",
+    "version": 2,
+    "description": "从对话与操作中归纳用户偏好（语言、风格、工具偏好、禁忌），以独立作用域存续，并提供给所有智能体作为默认上下文。",
+    "trigger": {
+      "kind": "schedule",
+      "cron": "0 2 * * *"
+    },
+    "inputs": {
+      "window": "近 N 天会话"
+    },
+    "nodes": [
+      {
+        "id": "collect",
+        "name": "汇集行为样本",
+        "kind": "input",
+        "role": null,
+        "params": {}
+      },
+      {
+        "id": "pattern",
+        "name": "模式归纳",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "kinds": [
+            "preference",
+            "routine",
+            "aversion"
+          ]
+        }
+      },
+      {
+        "id": "evidence",
+        "name": "证据绑定",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "min_occurrences": 2
+        }
+      },
+      {
+        "id": "profile",
+        "name": "偏好档案更新",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "scope": "global"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "collect",
+        "to": "pattern",
+        "when": "always"
+      },
+      {
+        "from": "pattern",
+        "to": "evidence",
+        "when": "always"
+      },
+      {
+        "from": "evidence",
+        "to": "profile",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "pattern": "frequency-count"
+    }
+  },
+  {
+    "id": "quick-capture",
+    "name": "快速捕获",
+    "category": "ingest",
+    "version": 2,
+    "description": "低延迟通道：先把原始内容原样落库（candidate/draft），保证零丢失，再异步走正式沉淀工作流。",
+    "trigger": {
+      "kind": "agent",
+      "sources": [
+        "message",
+        "tool_result"
+      ]
+    },
+    "inputs": {
+      "content": "原始内容",
+      "agent": "来源智能体",
+      "event_id": "幂等键"
+    },
+    "nodes": [
+      {
+        "id": "append_raw",
+        "name": "原文落库",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "status": "draft",
+          "idempotent_by": "event_id"
+        }
+      },
+      {
+        "id": "mirror",
+        "name": "镜像 Markdown 草稿",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "target": "markdown",
+          "layout": "daily"
+        }
+      },
+      {
+        "id": "enqueue",
+        "name": "入队沉淀任务",
+        "kind": "schedule",
+        "role": null,
+        "params": {
+          "job": "session-distill"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "append_raw",
+        "to": "mirror",
+        "when": "always"
+      },
+      {
+        "from": "mirror",
+        "to": "enqueue",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {}
+  },
+  {
+    "id": "knowledge-graph-build",
+    "name": "知识图谱构建",
+    "category": "maintain",
+    "version": 2,
+    "description": "从记忆与文档中构建实体-关系图：词义关系、层级关系、因果关系、时序关系，并计算社区与中心度，为脑图提供分层数据。",
+    "trigger": {
+      "kind": "schedule",
+      "cron": "0 5 * * *"
+    },
+    "inputs": {
+      "scope": "作用域"
+    },
+    "nodes": [
+      {
+        "id": "entities",
+        "name": "实体归一",
+        "kind": "extract",
+        "role": "extractor",
+        "params": {
+          "alias_merge": true
+        }
+      },
+      {
+        "id": "relations",
+        "name": "关系抽取",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "rels": [
+            "hypernym",
+            "hyponym",
+            "part_of",
+            "causes",
+            "supports",
+            "contradicts"
+          ]
+        }
+      },
+      {
+        "id": "prune",
+        "name": "弱边剪枝",
+        "kind": "fuse",
+        "role": null,
+        "params": {
+          "algorithm": "weight-threshold",
+          "min_weight": 0.2
+        }
+      },
+      {
+        "id": "community",
+        "name": "社区发现",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "algorithm": "louvain"
+        }
+      },
+      {
+        "id": "centrality",
+        "name": "中心度",
+        "kind": "graph",
+        "role": null,
+        "params": {
+          "algorithm": "pagerank"
+        }
+      },
+      {
+        "id": "persist",
+        "name": "写图库",
+        "kind": "persist",
+        "role": null,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "entities",
+        "to": "relations",
+        "when": "always"
+      },
+      {
+        "from": "relations",
+        "to": "prune",
+        "when": "always"
+      },
+      {
+        "from": "prune",
+        "to": "community",
+        "when": "always"
+      },
+      {
+        "from": "community",
+        "to": "centrality",
+        "when": "always"
+      },
+      {
+        "from": "centrality",
+        "to": "persist",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "relations": "cooccurrence",
+      "community": "connected-components",
+      "centrality": "degree"
+    }
+  },
+  {
+    "id": "review-quiz-generate",
+    "name": "复习题生成与批改",
+    "category": "learn",
+    "version": 2,
+    "description": "基于已审核知识生成单选/填空/简答/推导题，用户作答后由判定层批改并更新掌握度，驱动下一次复习间隔。",
+    "trigger": {
+      "kind": "manual",
+      "sources": [
+        "memory",
+        "knowledge"
+      ]
+    },
+    "inputs": {
+      "topic": "主题或实体",
+      "count": "题目数量"
+    },
+    "nodes": [
+      {
+        "id": "select",
+        "name": "选题素材",
+        "kind": "retrieve",
+        "role": null,
+        "params": {
+          "strategy": "coverage",
+          "top_k": 8
+        }
+      },
+      {
+        "id": "generate",
+        "name": "出题",
+        "kind": "generate",
+        "role": "chat",
+        "params": {
+          "types": [
+            "single",
+            "blank",
+            "short",
+            "derive"
+          ]
+        }
+      },
+      {
+        "id": "validate",
+        "name": "题目校验",
+        "kind": "verify",
+        "role": null,
+        "params": {
+          "rules": [
+            "answerable",
+            "no_leak",
+            "not_trivial"
+          ]
+        }
+      },
+      {
+        "id": "present",
+        "name": "呈现",
+        "kind": "emit",
+        "role": null,
+        "params": {
+          "channel": "ui"
+        }
+      },
+      {
+        "id": "grade",
+        "name": "批改",
+        "kind": "judge",
+        "role": "judge",
+        "params": {}
+      },
+      {
+        "id": "update",
+        "name": "更新掌握度",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "rel": "review_log"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "select",
+        "to": "generate",
+        "when": "always"
+      },
+      {
+        "from": "generate",
+        "to": "validate",
+        "when": "always"
+      },
+      {
+        "from": "validate",
+        "to": "present",
+        "when": "always"
+      },
+      {
+        "from": "present",
+        "to": "grade",
+        "when": "always"
+      },
+      {
+        "from": "grade",
+        "to": "update",
+        "when": "always"
+      }
+    ],
+    "fallbacks": {
+      "generate": "cloze-template",
+      "grade": "string-similarity"
+    }
+  }
+]

@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>memora · 记忆体</title>
+<link rel="stylesheet" href="/memory.css">
+<script defer src="/memory.js"></script>
+<script defer src="/orchestration.js"></script>
+<script defer src="/dag-embed.js"></script>
+</head>
+<body>
+<div class="mm-backdrop" aria-hidden="true"><canvas class="mm-backdrop-canvas"></canvas></div>
+<aside>
+<a class="brand" href="/">m<span>emora</span><small>记忆有处可循</small></a>
+<!-- Version banner: which COPY of the application this window is, and which version.
+     The values come from GET /api/agent/status (edition is decided by the backend: a frozen
+     build is 'standalone', source-tree execution is 'devel'), never hardcoded here -- a page that
+     printed a constant would keep claiming 'devel' after packaging, which is exactly the confusion
+     this banner exists to remove. The ids are read by tools/verify_edition_ui.cjs. -->
+<div class="edition" id="edition" data-edition="unknown" aria-live="polite">
+  <span class="edition-mark" id="edition-mark">版本读取中</span>
+  <span class="edition-version" id="edition-version"></span>
+</div>
+<!-- 项目空间 used to live here as a bare text box above the nav. It is now part of the 记忆检索
+     view (see #scope-panel): a scope is a *read range*, not a global mode, and the readable
+     context for choosing it is the retrieval page itself. Keeping it in the sidebar also implied
+     it applied to every view, which was never true — every view already has its own project
+     default and the settings/workflow views ignore it. -->
+<nav aria-label="主导航">
+<button data-view="retrieve" class="active">记忆检索 <span>01</span></button>
+<button data-view="inbox">分类与沉淀 <span>02</span></button>
+<button data-view="agents">智能体接入 <span>03</span></button>
+<button data-view="documents">Markdown 文档 <span>04</span></button>
+<button data-view="brain">脑图 <span>05</span></button>
+<button data-view="settings">模型配置 <span>06</span></button>
+<button data-view="workflows">工作流可视化 <span>07</span></button>
+</nav>
+<div class="sidebar-bottom">
+<span id="kernel">正在加载</span>
+<p id="role-status"></p>
+</div>
+</aside>
+<main>
+<header>
+<div><p class="eyebrow">LOCAL MEMORY / 记忆体</p><h1 id="heading">记忆检索</h1></div>
+<div id="connection" class="pill">连接状态读取中</div>
+</header>
+<p id="notice" role="status" hidden></p>
+
+<!-- 01 记忆检索 -->
+<section id="retrieve" class="view">
+<!-- 01a 检索范围（原侧栏「项目空间」并入此处）
+     Choosing where to read is part of searching, so the scope selector sits with the search box.
+     Four rungs, widest to narrowest: 全局 / 工作区 / 项目 / 对话. Each rung shows how many approved
+     memories it holds, because "global has 0" is the answer to "why isn't my shared fact found?".
+     The project本身 is set by path, which is what makes it concrete rather than a free-text label. -->
+<div class="scope-panel" id="scope-panel">
+  <div class="scope-head">
+    <div>
+      <p class="eyebrow">SCOPE / 检索范围</p>
+      <p class="muted" id="scope-summary">正在读取分区…</p>
+    </div>
+    <div class="row">
+      <button type="button" id="scope-refresh">刷新分区</button>
+    </div>
+  </div>
+
+  <div class="scope-tiers" id="scope-tiers" role="radiogroup" aria-label="检索范围级别"></div>
+
+  <div class="scope-space">
+    <label class="scope-field">项目空间名称
+      <input id="project" value="default" maxlength="80" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="scope-field">项目路径（用于定位与记录，可留空）
+      <input id="project-path" placeholder="例如 <project root>" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="row">
+      <button type="button" id="scope-apply">应用空间</button>
+      <small class="muted" id="scope-note">空间名只接受字母、数字、下划线、连字符。</small>
+    </div>
+  </div>
+
+  <div class="scope-conversation" id="scope-conversation" hidden>
+    <label class="scope-field">本次对话
+      <select id="scope-session"><option value="">（未选择对话）</option></select>
+    </label>
+    <p class="muted" id="scope-conversation-note">「对话」级别只显示挂在所选会话下的记忆；更宽的三级仍然可见。</p>
+  </div>
+</div>
+
+<div class="hero">
+<span class="eyebrow">从积累中找到线索</span>
+<h2>让每一次经验，都能再次被找到。</h2>
+<p>检索已沉淀的记忆，保留来源、日期和真实的检索方式。</p>
+<form id="search-form" class="search">
+<input id="query" aria-label="检索记忆" placeholder="输入问题、概念或过去的决定…" required maxlength="1000">
+<select id="search-mode" aria-label="检索方式">
+<option value="auto">自动检索</option>
+<option value="vector">向量检索</option>
+<option value="hybrid">混合检索</option>
+<option value="lexical">关键词检索</option>
+</select>
+<button class="primary">检索</button>
+</form>
+</div>
+<div class="section-title"><h3>检索结果</h3><small id="search-info">只检索已审核的记忆</small></div>
+<p class="muted">分数不可跨方式比较：关键词相关度是 BM25 值，向量相似度是 0–1，融合排序用词法与向量的名次组合。</p>
+<p id="search-warning" class="muted" role="status" hidden></p>
+<div id="results" class="cards"><div class="empty">提出一个问题，从已有的记忆开始。</div></div>
+
+<article class="panel" id="knowledge-panel">
+<h3>统一知识检索</h3>
+<p class="muted">在当前项目的长期记忆、已索引文档和会话原文中共同查找。会话保留为未核验资料；显式关系可补充相关记忆。</p>
+<form id="knowledge-form" class="search">
+<input id="knowledge-query" aria-label="统一知识检索" required maxlength="1000" placeholder="跨记忆、Markdown 与会话查找…">
+<button class="primary">查找全部来源</button>
+</form>
+<p id="knowledge-status" class="muted" role="status"></p>
+<div id="knowledge-results" class="cards"></div>
+<details><summary>智能体证据包与检索轨迹</summary><pre id="knowledge-context"></pre></details>
+</article>
+
+<details class="panel" id="rag-preview">
+<summary>证据包预览（智能体真正收到什么）</summary>
+<p class="muted">预览一次真实检索，返回智能体实际拿到的证据包：带随机 nonce 的原文、引用列表、真实检索方式，以及生成方式由调用方模型负责。仅在你点击下面按钮时请求一次，不会自动运行。</p>
+<div class="row">
+<button id="rag-button">用当前问题预览证据包</button>
+<small id="rag-status" class="muted">尚未请求</small>
+</div>
+<div id="rag-content" class="cards"></div>
+</details>
+
+<div class="section-title">
+<h3>最近发生的对话</h3>
+<div class="row"><small id="sessions-info">会话档案</small><button id="refresh-sessions">刷新</button></div>
+</div>
+<form id="session-search-form" class="search">
+<input id="session-search" aria-label="检索对话原文" placeholder="在对话原文里搜索关键词（会话级检索路由尚未部署，命中结果会说明这一点）" maxlength="200">
+<button>在对话里搜索</button>
+</form>
+<p class="muted" id="session-search-info">会话列表来自 GET /api/agent/sessions（归档的会话与轮数）。这里只读已归档的会话，不涉及已审核记忆。</p>
+<div id="sessions" class="cards"></div>
+
+<div class="section-title">
+<h3>记忆处理状态</h3>
+<div class="row">
+<span id="live-state" class="pill">实时更新：检测中</span>
+<button id="refresh-processing">刷新</button>
+</div>
+</div>
+<p class="muted" id="processing-info">对话如何变成记忆</p>
+<div id="processing" class="cards"></div>
+</section>
+
+<!-- 02 分类与沉淀 -->
+<section id="inbox" class="view" hidden>
+<div class="two-column">
+<article class="panel">
+<h2>添加记忆</h2>
+<p>智能体或你提供的内容先进入待审队列。Judge 分类并建议去向，确认后才进入长期检索。</p>
+
+<!-- Two ways in, one pipeline. A pasted paragraph and a dropped .md file both end up as pending
+     memories; the only difference is that a file may yield several candidates and keeps its
+     filename as provenance. The tab strip exists so the choice is visible instead of hidden
+     behind "paste or drop and we will guess". -->
+<div class="capture-tabs" role="tablist" aria-label="添加记忆的方式">
+  <button type="button" class="capture-tab is-active" id="tab-type" role="tab" aria-selected="true"
+          aria-controls="pane-type">直接输入记忆内容</button>
+  <button type="button" class="capture-tab" id="tab-doc" role="tab" aria-selected="false"
+          aria-controls="pane-doc">新增 Markdown 文档</button>
+</div>
+
+<div class="capture-pane" id="pane-type" role="tabpanel" aria-labelledby="tab-type">
+  <form id="capture-form">
+    <label>记忆内容<textarea id="capture-content" rows="7" required maxlength="16000" placeholder="一项决定、一段经验，或一条值得保存的知识…"></textarea></label>
+    <label>来源<input id="capture-source" value="workbench" required maxlength="300"></label>
+    <button class="primary">保存并分类</button>
+  </form>
+</div>
+
+<div class="capture-pane" id="pane-doc" role="tabpanel" aria-labelledby="tab-doc" hidden>
+  <p class="muted">Markdown 文档会被解析成若干条候选记忆，一起进入待审队列；文件名作为来源保留。也可以直接把 .md 文件拖到下面的区域。</p>
+  <label class="drop-zone" id="markdown-drop">
+    <input type="file" id="markdown-file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+    <span class="drop-zone-icon" aria-hidden="true">⇣</span>
+    <strong id="drop-zone-title">把 Markdown 文件拖到这里，或点击选择</strong>
+    <small id="drop-zone-hint" class="muted">支持 .md / .markdown / .txt；也可以直接粘贴 Markdown 正文。</small>
+  </label>
+  <label>Markdown 正文<textarea id="markdown-content" rows="9" maxlength="200000"
+    placeholder="# 标题&#10;&#10;正文… 拖入文件会自动填入这里"></textarea></label>
+  <label>来源标记<input id="markdown-source" value="workbench-markdown" maxlength="300"></label>
+  <div class="row">
+    <button type="button" class="primary" id="markdown-submit">解析并加入待审队列</button>
+    <small class="muted" id="markdown-status">尚未提交</small>
+  </div>
+</div>
+</article>
+<article class="panel pipeline">
+<span>01 接收与去重</span><span>↓</span><span>02 Judge / 规则分类</span><span>↓</span><span>03 确认沉淀</span><span>↓</span><span>04 向量索引 + Markdown 镜像</span>
+<p>判定异常、短期信息和指令风险会明确提示，不会自动批准。</p>
+</article>
+</div>
+<div class="section-title">
+<h3>记忆队列</h3>
+<div class="row">
+<select id="queue-status" aria-label="记忆状态">
+<option value="pending">待审记忆</option>
+<option value="approved">已沉淀</option>
+<option value="rejected">已拒绝</option>
+<option value="archived">已归档</option>
+</select>
+<button id="reindex">补建向量索引</button>
+<button id="refresh-queue">刷新</button>
+</div>
+</div>
+<div id="queue" class="cards"></div>
+<button id="queue-more" hidden>加载下一页</button>
+</section>
+
+<!-- 03 智能体接入 -->
+<section id="agents" class="view" hidden>
+<article class="panel">
+<h2>让智能体接入同一份记忆</h2>
+<p>智能体负责推理与调度；memora 负责保存、分类和检索。连接方每 30 秒发送心跳，90 秒无心跳显示离线。身份与模型名称由接入方自行报告——心跳不是身份认证。</p>
+<pre id="mcp-config"></pre>
+<button id="copy-config">复制接入配置</button>
+<details><summary>Codex 配置（config.toml）</summary><pre id="codex-config"></pre></details>
+<details><summary>DeepSeek Harness 接入补丁</summary><pre id="dsh-config"></pre></details>
+<p class="muted" id="connection-instructions"></p>
+</article>
+
+<div class="section-title"><h3>支持的接入协议</h3><small>只列出这个构建真的实现过的通道</small></div>
+<div id="agent-protocols" class="cards"></div>
+
+<div class="section-title">
+  <h3>智能体在线情况</h3>
+  <button id="refresh-peers">刷新</button>
+</div>
+<p class="muted" id="agent-summary">正在读取接入记录…</p>
+<div id="peers" class="cards"></div>
+</section>
+
+<!-- 04 Markdown 文档 -->
+<section id="documents" class="view" hidden>
+<div class="section-title">
+<p>不可变版本 · 保留日期 · 人类与智能体用途</p>
+<div class="row">
+<input type="file" id="document-file" accept=".md,.markdown,.txt">
+<button id="new-document">新建文档</button>
+<button id="repair-documents">修复镜像</button>
+</div>
+</div>
+<div class="document-layout">
+<div id="document-list" class="cards"></div>
+<article class="panel">
+<form id="document-form">
+<div class="row">
+<label>文档标识<input id="doc-slug" required maxlength="80" pattern="[\w\-\u4e00-\u9fff]+"></label>
+<label>用途<select id="doc-audience"><option value="human">给用户阅读</option><option value="agent">给智能体使用</option><option value="shared">共享</option></select></label>
+<label>原始日期<input id="doc-date" type="date"></label>
+</div>
+<label>标题<input id="doc-title" required maxlength="160"></label>
+<label>Markdown 原文<textarea id="doc-content" rows="16" required maxlength="80000"></textarea></label>
+<div class="row"><button class="primary">保存新版本</button><button type="button" id="publish-document">发布所选版本</button><button type="button" id="index-document">将发布版本加入待审知识</button><button type="button" id="index-document-chunks">索引到文档检索</button></div>
+<p class="hint">「索引到文档检索」写入文档分块索引（memory_document_rag_context 检索的就是它），与「加入待审知识」是两个不同步骤。</p>
+</form>
+<p id="doc-version">新文档 · 尚未保存</p>
+<div id="doc-history" class="row"></div>
+</article>
+</div>
+</div>
+<details class="panel" id="doc-corpus">
+<summary>文档检索语料：索引状态与证据包预览</summary>
+<p class="muted">文档分块索引（memory_document_rag_context 检索的那一份）里到底有什么。状态按项目统计，点按钮才会请求一次，切换页面不会自动刷新。</p>
+<div class="row">
+<button type="button" id="refresh-document-chunks">刷新索引状态</button>
+<small id="document-chunks-status-text" class="muted">尚未请求</small>
+</div>
+<div id="document-chunks-status" class="cards"></div>
+<p class="hint" id="document-evidence-note">读取真实的文档分块证据，与 memory_document_rag_context 使用同一索引；仅检索已发布且已索引的版本。</p>
+<div class="row">
+<input id="document-evidence-query" aria-label="文档证据问题" maxlength="1000" placeholder="输入要在文档中查找的问题">
+<button type="button" id="document-evidence-button">预览文档证据包</button>
+<small id="document-evidence-status-text" class="muted">尚未请求</small>
+</div>
+<p id="document-evidence-status" class="muted"></p>
+<div id="document-evidence" class="cards"></div>
+</details>
+</section>
+
+<!-- 05 脑图 -->
+<section id="brain" class="view" hidden>
+<div class="section-title">
+<p>布局表示观察方式；连线来自真实存储的关系。</p>
+<div class="row">
+<!-- Three brain types, three different reading modes, all from the same projection:
+       dictionary = the original 语义关系 view (markdown graph relaxed by a spring layout, straight
+         links): the pair-wise meaning network.
+       matt = the star-cloud rendering ported from the reference dictionary site (overlapping section
+         shells, curved cross-section links). It is an ADDITIONAL view, not a replacement: the user
+         asked for the original relation graph back after that substitution.
+       outline = 层级脑图, which is a different renderer entirely and was never changed.
+     matt is a 3D-only idea: it has no second rendering, so choosing 2D while it is selected is
+     pulled back to 3D with an explanatory note rather than filled with an empty stage
+     (see brain() in memory.js). -->
+<select id="brain-type" aria-label="脑图类型"><option value="dictionary">语义关系</option><option value="matt">星云关系图</option><option value="outline">层级脑图</option></select>
+<select id="brain-dimension" aria-label="脑图维度"><option value="3d">三维 3D</option><option value="2d">二维 2D</option></select>
+<!-- 预览开关：项目还没有已审核记忆时，用一份只读的演示图看语义关联与动效。
+     它不是记忆，不写库、不参与检索，一旦项目里有真实记忆就自动不可用。 -->
+<!-- The label is rewritten at runtime by paintBrainPreviewState() to 演示数据 / 关闭演示数据:
+     现在有三种脑图类型，同一份演示数据会被三种视图各自渲染，写死「预览语义关系」会误导。 -->
+<button type="button" id="brain-preview-toggle" aria-pressed="false">演示数据</button>
+<button id="refresh-brain">重新加载</button>
+</div>
+</div>
+<!-- Outside .section-title on purpose: it is a flex row (intro left, controls right), so a note
+     placed inside it competes with the intro for width and squeezes the paragraph into a column. -->
+<p class="muted" id="brain-dimension-note" role="status" hidden></p>
+<p id="brain-preview-note" class="muted" role="status" hidden></p>
+<iframe id="brain-frame" title="记忆脑图" allow="" src="about:blank"></iframe>
+<details class="panel">
+<summary>添加有证据的关系</summary>
+<form id="link-form" class="row">
+<label>起点记忆 ID<input id="edge-a" required></label>
+<label>终点记忆 ID<input id="edge-b" required></label>
+<label>关系<select id="edge-kind"><option value="related">语义：相关</option><option value="supports">语义：支持</option><option value="contradicts">语义：矛盾</option><option value="supersedes">语义：替代</option><option value="part_of">层级：组成</option><option value="prerequisite">层级：前置</option><option value="sequence">层级：顺序</option></select></label>
+<label>依据<input id="edge-evidence" placeholder="层级关系必填"></label>
+<button>保存关系</button>
+</form>
+</details>
+</section>
+
+<!-- 06 模型配置 -->
+<section id="settings" class="view" hidden>
+<p class="intro">基础模型配置：Embedding 把文本转换为向量；Judge 判断类别、持久性和风险。其他角色与文档处理阶段在“工作流可视化”里按节点配置；总体任务由接入智能体调度。</p>
+<form id="settings-form">
+<div id="model-settings" class="two-column"></div>
+<p class="mm-hint" id="model-key-hint">密钥有两种写法，是两件事：<strong>字面密钥</strong>由服务端保存、永不回传——已配置时只显示“已配置”，输入框永远从空开始，留空保存表示不改动已存的密钥；<strong>环境变量名</strong>只是让服务端在调用时从该变量读取密钥。两者同时存在时以字面密钥为准。</p>
+<div class="row">
+<button class="primary">保存模型配置</button>
+<button type="button" class="mm-probe" id="model-probe" title="对服务端【已保存】的每个角色发起一次真实最小调用（embedding → /embeddings、judge → /chat/completions、rerank → /rerank），如实显示 HTTP 状态、延迟与错误。它探测的是已保存配置，不是页面上还没保存的草稿：先保存，再点这里。">测试连接</button>
+</div>
+</form>
+<p class="muted">本地服务可用 Ollama 的 /v1、LM Studio 或 llama.cpp；云端使用 HTTPS 的 OpenAI 兼容接口。密钥可以填字面值，也可以只填环境变量名——字面密钥在服务端落盘，页面永远拿不回来。保存配置并不代表模型已经连通；“测试连接”会对服务端<strong>已保存</strong>的 embedding / judge / rerank 各发起一次真实最小调用，如实显示 HTTP 状态、延迟与错误，未保存的草稿不会被探测。</p>
+
+<!-- Completion roles as "模型类型". These are the roles 工作流可视化's 分工与扩展空间 binds, and the
+     types a workflow node can be assigned. One table, same /models registry: binding a type here
+     makes it selectable on a canvas node there, so there is no second place to keep in sync. -->
+<div class="section-title">
+  <h3>模型类型（与工作流分工对应）</h3>
+  <button type="button" id="model-types-save">保存模型类型</button>
+</div>
+<p class="muted" id="model-types-note">正在读取模型池…</p>
+<div id="model-types" class="model-types"></div>
+</section>
+
+<!-- 07 工作流可视化：填入 orchestration.js 的角色/模型/提示词面板与 dag 画布 -->
+<section id="workflows" class="view" hidden>
+<div id="workflow-visual"></div>
+</section>
+</main>
+</body>
+</html>

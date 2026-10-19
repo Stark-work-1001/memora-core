@@ -1,0 +1,2088 @@
+/* ==========================================================================
+   memora workbench · memory.css
+   --------------------------------------------------------------------------
+   Read order: tokens -> base -> layout -> components -> forms -> empty states
+   -> animated background -> responsive -> reduced motion -> orchestration.
+
+   Rules of this file
+   · Every colour and every size resolves to an --mm-* token declared in the
+     two :root blocks below. The only colour literals in the whole file live in
+     those two token blocks (the second is the dark-scheme override), so a
+     theme change is a token change.
+   · Text pairs are >= 4.5:1 and control borders / UI edges >= 3:1 in both
+     colour schemes; body ink keeps its original 11.2:1 pairing on --mm-bg.
+   · Nothing is smaller than --mm-text-xs (12px); body copy is
+     --mm-text-base (15px).
+   · The animated backdrop is CSS-only: transform/opacity keyframes on
+     composited layers, no JavaScript, no timers, no main-thread work while
+     idle, pointer-events:none, and a static state under
+     prefers-reduced-motion. It is defined for the workbench document only —
+     the brain views load their own stylesheet, so it never leaks into those
+     iframes.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Design tokens — light scheme
+   -------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --mm-bg: #f5f6f3;
+  --mm-surface: #ffffff;
+  --mm-panel: #fbfcf7;
+  --mm-panel-alt: #eef1e8;
+  --mm-sidebar: #edf0e8;
+  --mm-hero: #e7ece0;
+  --mm-code-bg: #edf1e7;
+  --mm-tag-bg: #edf2e7;
+  --mm-field-bg: #f7f8f4;
+  --mm-hover-bg: #e8eee5;
+  --mm-notice-bg: #e7efdd;
+  --mm-disabled-bg: #f1f3ee;
+
+  /* ink — 11.2:1 / 6.5:1 / 4.9:1 against --mm-bg */
+  --mm-ink: #243a32;
+  --mm-ink-muted: #4f5d4b;
+  --mm-ink-faint: #5d6c58;
+
+  /* lines and focus — --mm-line is 3.5:1 on --mm-surface */
+  --mm-line: #7f8b80;
+  --mm-line-strong: #5f6d5e;
+  --mm-hero-line: #768473;
+  --mm-focus: #2f6b4c;
+  --mm-focus-halo: rgba(47, 107, 76, 0.18);
+  --mm-notice-line: #5f7a55;
+  --mm-notice-ink: #294b27;
+
+  /* accent */
+  --mm-accent: #244f3d;
+  --mm-accent-hover: #38674e;
+  --mm-accent-ink: #ffffff;
+  --mm-on-accent-muted: #d9e2d8;
+
+  /* status */
+  --mm-ok: #2f7a4f;
+  --mm-warn: #8a5a12;
+  --mm-danger: #a33a2c;
+
+  /* animated backdrop — every motion colour is a token, never a literal */
+  --mm-clear: transparent;
+  --mm-backdrop-opacity: 0.9;
+  --mm-backdrop-1: #e9ece5;
+  --mm-backdrop-2: #eceee8;
+  --mm-backdrop-3: #e8ebe4;
+  --mm-backdrop-sheen: rgba(118, 150, 126, 0.12);
+  --mm-grid-line: rgba(92, 122, 100, 0.1);
+  --mm-speed-drift: 64s;
+  --mm-speed-drift-alt: 96s;
+  --mm-speed-sweep: 38s;
+
+  /* type ramp — 12px floor */
+  --mm-text-xs: 12px;
+  --mm-text-sm: 13px;
+  --mm-text-base: 15px;
+  --mm-text-lg: 17px;
+  --mm-text-xl: 19px;
+  --mm-text-2xl: 24px;
+  --mm-text-3xl: 29px;
+  --mm-text-display: 37px;
+
+  /* font stacks — real system faces with CJK coverage */
+  --mm-font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif;
+  --mm-font-cjk: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Source Han Sans SC", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif;
+  --mm-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", "Sarasa Mono SC", "Noto Sans Mono CJK SC",
+    "Source Han Mono SC", "Microsoft YaHei", "PingFang SC", monospace;
+  --mm-font-display: Georgia, "Times New Roman", var(--mm-font-cjk);
+
+  /* spacing ramp */
+  --mm-space-1: 2px;
+  --mm-space-2: 4px;
+  --mm-space-3: 6px;
+  --mm-space-4: 8px;
+  --mm-space-5: 10px;
+  --mm-space-6: 12px;
+  --mm-space-7: 16px;
+  --mm-space-8: 20px;
+  --mm-space-9: 24px;
+  --mm-space-10: 32px;
+  --mm-space-11: 36px;
+  --mm-space-12: 42px;
+
+  /* radii + motion */
+  --mm-radius-sm: 6px;
+  --mm-radius-md: 7px;
+  --mm-radius: 10px;
+  --mm-radius-lg: 12px;
+  --mm-radius-pill: 20px;
+}
+
+/* --------------------------------------------------------------------------
+   2. Design tokens — dark scheme (token overrides only)
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --mm-bg: #151517;
+    --mm-surface: #2c2c2e;
+    --mm-panel: #222224;
+    --mm-panel-alt: #26262a;
+    --mm-sidebar: #1b1b1c;
+    --mm-hero: #26262a;
+    --mm-code-bg: #202024;
+    --mm-tag-bg: #2b2b2f;
+    --mm-field-bg: #1d1d1f;
+    --mm-hover-bg: #43454a;
+    --mm-notice-bg: #1f2a22;
+    --mm-disabled-bg: #222224;
+
+    --mm-ink: #f2f2f3;
+    --mm-ink-muted: #acadae;
+    --mm-ink-faint: #8d8d8f;
+
+    --mm-line: #29292b;
+    --mm-line-strong: #3a3a3d;
+    --mm-hero-line: #3a3a3d;
+    --mm-focus: #7fd6a0;
+    --mm-focus-halo: rgba(127, 214, 160, 0.22);
+    --mm-notice-line: #3f7355;
+    --mm-notice-ink: #cfe3c8;
+
+    --mm-accent: #4fb39b;
+    --mm-accent-hover: #3aa88f;
+    --mm-accent-ink: #06211b;
+    --mm-on-accent-muted: #06211b;
+
+    --mm-ok: #3ecf8e;
+    --mm-warn: #f5b544;
+    --mm-danger: #f0616d;
+
+    --mm-backdrop-opacity: 0.55;
+    --mm-backdrop-1: #17181a;
+    --mm-backdrop-2: #1a1c1e;
+    --mm-backdrop-3: #141517;
+    --mm-backdrop-sheen: rgba(127, 214, 160, 0.07);
+    --mm-grid-line: rgba(170, 180, 190, 0.06);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   3. Base
+   -------------------------------------------------------------------------- */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font-family: var(--mm-font-sans);
+  font-size: var(--mm-text-base);
+  line-height: 1.6;
+  display: flex;
+  min-height: 100vh;
+  position: relative;
+  isolation: isolate;
+}
+
+h1 {
+  font-size: var(--mm-text-2xl);
+  font-weight: 500;
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--mm-text-xl);
+  line-height: 1.6;
+  font-weight: 500;
+}
+
+h3 {
+  font-size: var(--mm-text-lg);
+  font-weight: 500;
+}
+
+small {
+  display: inline-block;
+}
+
+summary {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 3px solid var(--mm-focus);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   4. Sidebar
+   min-height:0 on the flex column lets the nav scroll instead of pushing
+   .sidebar-bottom (margin-top:auto) off the bottom of a short viewport.
+
+   Scoped to the workbench's own sidebar (body > aside). A bare `aside` selector also matched the
+   workflow canvas's <aside class="dag-inspector"> once the canvas became an embedded element
+   instead of a separate page: it inherited position:fixed, inset:0 auto 0 0 and width:236px, so the
+   inspector was pinned over the page at the top-left of the window. The child combinator keeps the
+   canvas untouched without renaming fifty rules.
+   -------------------------------------------------------------------------- */
+body > aside {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 236px;
+  padding: var(--mm-space-11) var(--mm-space-9);
+  background: var(--mm-sidebar);
+  border-right: 1px solid var(--mm-line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  z-index: 2;
+}
+
+.brand {
+  font-family: var(--mm-font-display);
+  font-size: var(--mm-text-display);
+  font-weight: 700;
+  color: var(--mm-accent);
+  text-decoration: none;
+  letter-spacing: -2px;
+  flex: 0 0 auto;
+}
+
+.brand small {
+  display: block;
+  font-family: var(--mm-font-cjk);
+  font-size: var(--mm-text-sm);
+  letter-spacing: 3px;
+  margin: var(--mm-space-4) 0 var(--mm-space-10);
+  color: var(--mm-ink-muted);
+}
+
+/* -- version banner (top-left, directly under the memora wordmark) -----------
+   Two builds of this application exist on this machine and they must never be mistaken for each
+   other: the development tree (devel) is what is being changed and reviewed, the packaged copy
+   (standalone) is what the user actually runs. The banner states which one this window is, and
+   the version, so a screenshot is self-describing. Colours come from the tokens only; the two
+   editions differ by a dot + the word, not by a second palette. */
+.edition {
+  display: flex;
+  align-items: center;
+  gap: var(--mm-space-4);
+  margin: calc(-1 * var(--mm-space-8)) 0 var(--mm-space-10);
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-xs);
+  letter-spacing: 1px;
+  color: var(--mm-ink-muted);
+  flex: 0 0 auto;
+}
+
+.edition-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mm-space-3);
+  padding: var(--mm-space-2) var(--mm-space-5);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+  text-transform: lowercase;
+  letter-spacing: 2px;
+}
+
+/* The dot is the fastest read: green = the packaged copy the user runs, amber = the working tree
+   being edited. Under prefers-reduced-motion nothing animates anyway; there is no animation here. */
+.edition-mark::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mm-ink-faint);
+}
+
+.edition[data-edition="standalone"] .edition-mark {
+  border-color: var(--mm-ok);
+  color: var(--mm-ok);
+}
+
+.edition[data-edition="standalone"] .edition-mark::before {
+  background: var(--mm-ok);
+}
+
+.edition[data-edition="devel"] .edition-mark {
+  border-color: var(--mm-warn);
+  color: var(--mm-warn);
+}
+
+.edition[data-edition="devel"] .edition-mark::before {
+  background: var(--mm-warn);
+}
+
+.edition-version {
+  color: var(--mm-ink-faint);
+}
+
+.scope {
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink-muted);
+  letter-spacing: 1px;
+  flex: 0 0 auto;
+}
+
+.scope input {
+  margin: var(--mm-space-5) 0 var(--mm-space-9);
+  background: var(--mm-field-bg);
+}
+
+nav {
+  display: grid;
+  gap: var(--mm-space-4);
+  align-content: start;
+}
+
+/* body > aside only: the canvas has its own <nav class="dag-rail"> which must keep its own flex
+   behaviour. See the note on body > aside above. */
+body > aside nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* Scoped to the workbench sidebar's nav. The canvas embeds its own <nav class="dag-rail">, and a
+   bare `nav` selector made its buttons inherit this sidebar geometry (flex space-between, sidebar
+   padding), which broke the rail layout. */
+body > aside nav a,
+body > aside nav button {
+  border: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mm-space-4);
+  background: transparent;
+  padding: var(--mm-space-7) var(--mm-space-6);
+  text-align: left;
+  color: var(--mm-ink);
+}
+
+body > aside nav a:hover,
+body > aside nav button:hover {
+  background: var(--mm-hover-bg);
+}
+
+/* 07 工作流可视化 is a real view button now, not a link to a separate page: the canvas lives in
+   <section id="workflows"> inside <main>, so show()'s .active toggle applies to it like any other
+   view. Kept as a rule only to state that nav links (none remain) would not be underlined. */
+body > aside nav a {
+  text-decoration: none;
+}
+
+body > aside nav button.active {
+  background: var(--mm-accent);
+  color: var(--mm-accent-ink);
+}
+
+body > aside nav span {
+  font-size: var(--mm-text-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: var(--mm-ink-faint);
+}
+
+body > aside nav button.active span {
+  color: var(--mm-on-accent-muted);
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+  flex: 0 0 auto;
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink-muted);
+  line-height: 1.8;
+  padding-top: var(--mm-space-9);
+}
+
+.sidebar-bottom span {
+  padding: var(--mm-space-2) var(--mm-space-4);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+}
+
+.sidebar-bottom small {
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-xs);
+}
+
+/* --------------------------------------------------------------------------
+   5. Page frame
+   -------------------------------------------------------------------------- */
+main {
+  margin-left: 236px;
+  padding: var(--mm-space-11) var(--mm-space-12);
+  width: calc(100% - 236px);
+  max-width: 1900px;
+  position: relative;
+  z-index: 1;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mm-space-7);
+  margin-bottom: var(--mm-space-10);
+}
+
+.eyebrow {
+  font-size: var(--mm-text-xs);
+  color: var(--mm-ink-faint);
+  letter-spacing: 2px;
+  margin: 0 0 var(--mm-space-6);
+}
+
+.pill {
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-pill);
+  padding: var(--mm-space-4) var(--mm-space-7);
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink);
+  background: var(--mm-surface);
+}
+
+.hero {
+  padding: var(--mm-space-12);
+  background: var(--mm-hero);
+  border: 1px solid var(--mm-hero-line);
+  border-radius: var(--mm-radius-lg);
+}
+
+.hero h2 {
+  font-family: var(--mm-font-cjk);
+  font-size: var(--mm-text-3xl);
+  font-weight: 500;
+  margin: var(--mm-space-7) 0;
+}
+
+.hero p {
+  color: var(--mm-ink-muted);
+  line-height: 1.8;
+}
+
+.search {
+  display: flex;
+  gap: var(--mm-space-4);
+  margin-top: var(--mm-space-10);
+}
+
+.search input {
+  flex: 1;
+  width: 30%;
+}
+
+#notice {
+  position: sticky;
+  top: var(--mm-space-5);
+  z-index: 5;
+  padding: var(--mm-space-7);
+  background: var(--mm-notice-bg);
+  color: var(--mm-notice-ink);
+  border: 1px solid var(--mm-notice-line);
+  border-radius: var(--mm-radius-sm);
+  white-space: pre-wrap;
+}
+
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mm-space-7);
+  margin: var(--mm-space-10) 0 var(--mm-space-7);
+}
+
+.section-title p {
+  color: var(--mm-ink-muted);
+}
+
+.cards {
+  display: grid;
+  gap: var(--mm-space-6);
+}
+
+.panel,
+.card,
+.empty {
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius);
+  padding: var(--mm-space-9);
+  background: var(--mm-panel);
+}
+
+.card h3 {
+  margin: 0 0 var(--mm-space-5);
+}
+
+.card .content {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.card small,
+.muted {
+  color: var(--mm-ink-muted);
+  line-height: 1.8;
+}
+
+.card footer {
+  display: flex;
+  gap: var(--mm-space-4);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: var(--mm-space-7);
+}
+
+.card .meta {
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-xs);
+  margin: var(--mm-space-7) 0 0;
+  color: var(--mm-ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  background: var(--mm-tag-bg);
+  color: var(--mm-ink-muted);
+  border-radius: var(--mm-radius-sm);
+  padding: var(--mm-space-3) var(--mm-space-4);
+  font-size: var(--mm-text-xs);
+}
+
+.empty {
+  text-align: center;
+  color: var(--mm-ink-muted);
+  padding: var(--mm-space-12) var(--mm-space-8);
+  line-height: 1.8;
+}
+
+.two-column {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--mm-space-8);
+}
+
+.panel p,
+.intro {
+  color: var(--mm-ink-muted);
+  line-height: 1.9;
+}
+
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--mm-space-4);
+  background: var(--mm-panel-alt);
+}
+
+.pipeline span {
+  font-size: var(--mm-text-sm);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--mm-space-4);
+  flex-wrap: wrap;
+}
+
+.row label {
+  flex: 1;
+  min-width: 100px;
+}
+
+.row input {
+  width: 100%;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--mm-code-bg);
+  color: var(--mm-ink);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-md);
+  padding: var(--mm-space-8);
+  line-height: 1.8;
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-sm);
+}
+
+.document-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--mm-space-8);
+  align-items: start;
+}
+
+.document-layout .card {
+  padding: var(--mm-space-7);
+  cursor: pointer;
+}
+
+#document-file {
+  width: 210px;
+  font-size: var(--mm-text-sm);
+}
+
+/* Explains what #index-document-chunks writes and, more usefully, how it differs from the
+   adjacent #index-document: the two POST different routes into different stores. Scoped under
+   #documents and to the .hint class so nothing already on the page changes appearance. */
+#documents .hint {
+  margin: var(--mm-space-5) 0 0;
+  font-size: var(--mm-text-sm);
+  line-height: 1.8;
+  color: var(--mm-ink-muted);
+}
+
+/* The height no longer subtracts a hard-coded 248px chrome offset: a viewport
+   relative clamp stays usable from ~320px up instead of forcing a 480px
+   minimum that overflowed a 728px-tall window. */
+#brain-frame {
+  display: block;
+  width: 100%;
+  height: clamp(320px, 72vh, 1100px);
+  height: clamp(320px, 72dvh, 1100px);
+  min-height: 0;
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius);
+  background: var(--mm-surface);
+}
+
+details.panel {
+  margin-top: var(--mm-space-7);
+}
+
+.view[hidden],
+[hidden] {
+  display: none !important;
+}
+
+#queue-more {
+  margin-top: var(--mm-space-8);
+}
+
+#doc-history button {
+  font-size: var(--mm-text-xs);
+}
+
+/* --------------------------------------------------------------------------
+   6. Forms and controls
+   -------------------------------------------------------------------------- */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-md);
+  background: var(--mm-surface);
+  padding: var(--mm-space-5) var(--mm-space-7);
+  color: var(--mm-ink);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+button:hover {
+  background: var(--mm-hover-bg);
+}
+
+/* Disabled state uses real tokens instead of opacity so the label keeps its
+   contrast ratio while a request is in flight. */
+button:disabled {
+  background: var(--mm-disabled-bg);
+  color: var(--mm-ink-faint);
+  border-color: var(--mm-line);
+  cursor: progress;
+}
+
+.primary {
+  background: var(--mm-accent);
+  color: var(--mm-accent-ink);
+  border-color: var(--mm-accent);
+}
+
+.primary:hover {
+  background: var(--mm-accent-hover);
+  border-color: var(--mm-accent-hover);
+}
+
+input,
+textarea,
+select {
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-surface);
+  color: var(--mm-ink);
+  padding: var(--mm-space-5);
+  width: 100%;
+  outline: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--mm-focus);
+  box-shadow: 0 0 0 3px var(--mm-focus-halo);
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.8;
+}
+
+label {
+  display: block;
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink-muted);
+  margin: var(--mm-space-5) 0;
+}
+
+label input,
+label textarea,
+label select {
+  display: block;
+  margin-top: var(--mm-space-4);
+}
+
+select {
+  width: auto;
+}
+
+input[type="checkbox"] {
+  width: auto;
+  margin-right: var(--mm-space-4);
+}
+
+/* --------------------------------------------------------------------------
+   7. Empty states
+   .empty-state is the shared component: icon slot + primary line + muted hint.
+   -------------------------------------------------------------------------- */
+.empty-state {
+  grid-column: 1 / -1;
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mm-space-4);
+  padding: var(--mm-space-11) var(--mm-space-8);
+  text-align: center;
+  background: var(--mm-panel);
+  border: 1px dashed var(--mm-line-strong);
+  border-radius: var(--mm-radius-lg);
+}
+
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--mm-surface);
+  border: 1px solid var(--mm-line-strong);
+  color: var(--mm-ink-muted);
+  font-size: var(--mm-text-lg);
+  line-height: 1;
+}
+
+.empty-state-primary {
+  margin: 0;
+  font-size: var(--mm-text-base);
+  font-weight: 600;
+  color: var(--mm-ink);
+}
+
+.empty-state-hint {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--mm-text-sm);
+  line-height: 1.7;
+  color: var(--mm-ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+   8. Animated background
+   Two pseudo-element layers ship with the stylesheet, so the backdrop is live
+   even with no extra markup. An opt-in element adds a slower sheen and styles
+   an optional canvas:
+
+     <div class="mm-backdrop" aria-hidden="true">
+       <canvas class="mm-backdrop-canvas"></canvas>
+     </div>
+
+   placed anywhere inside <body>. The canvas is intentionally left blank —
+   this file ships no JavaScript. All motion is transform/opacity on composited
+   layers (will-change + contain:strict), so an idle page does no main-thread
+   work. Every stop is a token sitting a few points from --mm-bg, which keeps
+   the worst case (text over the darkest stop) at >= 4.5:1.
+   -------------------------------------------------------------------------- */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  z-index: 0;
+  pointer-events: none;
+  contain: strict;
+  will-change: transform;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+body::before {
+  background-image:
+    radial-gradient(38vmax 38vmax at 22% 26%, var(--mm-backdrop-1) 0%, var(--mm-clear) 62%),
+    radial-gradient(32vmax 32vmax at 76% 20%, var(--mm-backdrop-2) 0%, var(--mm-clear) 60%),
+    radial-gradient(42vmax 42vmax at 68% 78%, var(--mm-backdrop-3) 0%, var(--mm-clear) 64%);
+  opacity: var(--mm-backdrop-opacity);
+  animation: mm-drift var(--mm-speed-drift) ease-in-out infinite alternate;
+}
+
+body::after {
+  background-image:
+    radial-gradient(30vmax 30vmax at 34% 74%, var(--mm-backdrop-2) 0%, var(--mm-clear) 58%),
+    radial-gradient(26vmax 26vmax at 86% 60%, var(--mm-backdrop-1) 0%, var(--mm-clear) 56%),
+    linear-gradient(var(--mm-grid-line) 1px, var(--mm-clear) 1px),
+    linear-gradient(90deg, var(--mm-grid-line) 1px, var(--mm-clear) 1px);
+  background-size: auto, auto, 72px 72px, 72px 72px;
+  opacity: calc(var(--mm-backdrop-opacity) * 0.72);
+  animation: mm-drift-alt var(--mm-speed-drift-alt) ease-in-out infinite alternate;
+}
+
+.mm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
+
+.mm-backdrop::before {
+  content: "";
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: -45%;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    var(--mm-clear) 0%,
+    var(--mm-backdrop-sheen) 50%,
+    var(--mm-clear) 100%
+  );
+  opacity: var(--mm-backdrop-opacity);
+  will-change: transform;
+  animation: mm-sweep var(--mm-speed-sweep) ease-in-out infinite alternate;
+}
+
+.mm-backdrop-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+@keyframes mm-drift {
+  from {
+    transform: translate3d(-3%, -2%, 0) scale(1.02);
+  }
+  to {
+    transform: translate3d(4%, 3%, 0) rotate(4deg) scale(1.08);
+  }
+}
+
+@keyframes mm-drift-alt {
+  from {
+    transform: translate3d(3%, 2%, 0);
+  }
+  to {
+    transform: translate3d(-5%, -3%, 0);
+  }
+}
+
+@keyframes mm-sweep {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(320%, 0, 0);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   9. Responsive
+   -------------------------------------------------------------------------- */
+@media (max-width: 1050px) {
+  body > aside {
+    width: 190px;
+    padding: var(--mm-space-10) var(--mm-space-7);
+  }
+
+  main {
+    margin-left: 190px;
+    width: calc(100% - 190px);
+    padding: var(--mm-space-10) var(--mm-space-9);
+  }
+
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .document-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding: var(--mm-space-9);
+  }
+
+  .hero h2 {
+    font-size: var(--mm-text-2xl);
+  }
+
+  .section-title {
+    align-items: start;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 650px) {
+  body > aside {
+    position: relative;
+    width: 100%;
+    padding: var(--mm-space-8);
+    overflow: visible;
+  }
+
+  .brand small,
+  .scope,
+  .sidebar-bottom {
+    display: none;
+  }
+
+  nav {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  nav a,
+  nav button {
+    font-size: var(--mm-text-xs);
+    padding: var(--mm-space-5) var(--mm-space-2);
+  }
+
+  nav span {
+    display: none;
+  }
+
+  body {
+    display: block;
+  }
+
+  main {
+    margin: 0;
+    width: 100%;
+    padding: var(--mm-space-8);
+  }
+
+  .search {
+    flex-wrap: wrap;
+  }
+
+  .hero h2 {
+    font-size: var(--mm-text-xl);
+  }
+
+  header {
+    gap: var(--mm-space-5);
+  }
+
+  .pill {
+    font-size: var(--mm-text-xs);
+  }
+
+  .row button {
+    font-size: var(--mm-text-sm);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   10. Reduced motion — the backdrop collapses to one static frame and every
+   transition is dropped.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  .mm-backdrop::before,
+  .mm-backdrop-canvas {
+    animation: none !important;
+    transform: none;
+  }
+
+  body::after {
+    transform: translate3d(0, 0, 0);
+  }
+
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   11. Orchestration view (carried over from the original stylesheet)
+   -------------------------------------------------------------------------- */
+.panel + article.panel,
+.panel + details.panel {
+  margin-top: var(--mm-space-8);
+}
+
+#role-bindings {
+  max-height: 260px;
+  overflow: auto;
+}
+
+#workflow-stages input {
+  flex: 1;
+  min-width: 160px;
+}
+
+#registry-profiles {
+  margin: var(--mm-space-8) 0;
+}
+
+#orchestration-runs pre,
+#accumulation-jobs pre {
+  max-height: 400px;
+  overflow: auto;
+}
+
+#workflows > .two-column {
+  margin: var(--mm-space-8) 0;
+}
+
+/* --------------------------------------------------------------------------
+   12. 文档检索语料 (documents view, #doc-corpus)
+
+   Two blocks behind one disclosure: the corpus STATUS panel (GET /api/agent/
+   document-chunks-status) and the document EVIDENCE preview.
+
+   Every rule below is scoped under #doc-corpus and every value resolves to an
+   --mm-* token, so nothing already on the page moves. The shared components
+   (.cards/.card/.row/.tag/.meta/.empty) do the bulk; these rules add only what
+   the status panel needs and the page did not have yet: a numeric emphasis that
+   is a real element rather than a class, and a status line that is not a
+   <small> (a failed refresh must not be mistakable for the muted helper text
+   sitting next to the button).
+   -------------------------------------------------------------------------- */
+
+#doc-corpus .count {
+  font-size: var(--mm-text-xl);
+  font-weight: 500;
+  color: var(--mm-ink);
+}
+
+#doc-corpus .warn {
+  margin: var(--mm-space-5) 0 0;
+  padding: var(--mm-space-5) var(--mm-space-6);
+  border: 1px solid var(--mm-warn);
+  border-left-width: var(--mm-space-1);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel-alt);
+  color: var(--mm-ink);
+  font-size: var(--mm-text-sm);
+  line-height: 1.8;
+}
+
+#doc-corpus .error {
+  margin: var(--mm-space-5) 0 0;
+  padding: var(--mm-space-5) var(--mm-space-6);
+  border: 1px solid var(--mm-danger);
+  border-left-width: var(--mm-space-1);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel-alt);
+  color: var(--mm-ink);
+  font-size: var(--mm-text-sm);
+  line-height: 1.8;
+}
+
+/* The revision breakdown is a real table: a slug / audience / version / chunks
+   row has four columns and none of them is prose, so a table keeps them
+   readable without inventing a grid class only this panel would ever use. */
+#doc-corpus table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--mm-space-7);
+  font-size: var(--mm-text-sm);
+}
+
+#doc-corpus caption {
+  text-align: left;
+  color: var(--mm-ink-muted);
+  padding: 0 0 var(--mm-space-4);
+}
+
+#doc-corpus th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--mm-ink-muted);
+  border-bottom: 1px solid var(--mm-line);
+  padding: var(--mm-space-4) var(--mm-space-5);
+}
+
+#doc-corpus td {
+  border-bottom: 1px solid var(--mm-panel-alt);
+  padding: var(--mm-space-4) var(--mm-space-5);
+}
+
+#doc-corpus td.count {
+  font-size: var(--mm-text-base);
+  font-family: var(--mm-font-mono);
+}
+
+/* The two status lines are deliberately NOT .muted: a failed refresh has to look
+   different from the 尚未请求 / 未接入 helper text beside it. */
+#document-chunks-status-text,
+#document-evidence-status-text {
+  color: var(--mm-ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+   13. 会话档案 (retrieve view, #sessions)
+
+   The "recent conversations" panel stopped being a flat list: each card can
+   open its archived turns, and a search line sits above the list. Everything
+   below is scoped to #sessions or to the ids this panel owns, and every value
+   resolves to an --mm-* token, so no rule here can move anything already on
+   the page. The shared components (.cards/.card/.row/.tag/.meta/.content/
+   .empty/.panel) still do the bulk of the work; these rules add only what the
+   transcript needs and the page did not have yet.
+
+   .panel is deliberately NOT applied to the transcript target in JS: a
+   .card > .panel would inherit .panel's own border and padding and read as a
+   box inside a box, so the target carries .session-body and gets its geometry
+   from the rule below instead.
+   -------------------------------------------------------------------------- */
+
+#session-search-form {
+  margin: var(--mm-space-4) 0 var(--mm-space-5);
+}
+
+#sessions .card > button {
+  margin-top: var(--mm-space-7);
+}
+
+/* The expanded area is a region, not a card: .session-turn rows already carry
+   their own borders, so a second outer frame would double every line. */
+.session-body {
+  margin-top: var(--mm-space-6);
+  border-top: 1px solid var(--mm-line);
+  padding-top: var(--mm-space-6);
+}
+
+.session-body .card {
+  background: var(--mm-panel-alt);
+}
+
+/* A turn list, not prose: the seq/role/time header is what makes an archived
+   conversation readable, so it is a real <ol> and the markup stays meaningful. */
+.session-turns {
+  display: grid;
+  gap: var(--mm-space-5);
+  margin: var(--mm-space-5) 0 0;
+  padding-left: var(--mm-space-9);
+  font-size: var(--mm-text-sm);
+}
+
+.session-turn {
+  padding: var(--mm-space-5) var(--mm-space-6);
+  border-left: var(--mm-space-1) solid var(--mm-line-strong);
+  background: var(--mm-surface);
+  border-radius: var(--mm-radius-sm);
+}
+
+.session-turn .row {
+  gap: var(--mm-space-5);
+  margin-bottom: var(--mm-space-3);
+}
+
+.session-turn .content {
+  margin: 0;
+  color: var(--mm-ink);
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-turn .meta {
+  margin-top: var(--mm-space-3);
+}
+
+/* The two states this panel must never render as a blank box. Both reuse the
+   #doc-corpus warn/error treatment so a failure looks the same wherever it is
+   reported; the colour is the token, never a literal. */
+#sessions .warn,
+#sessions .error {
+  margin: var(--mm-space-5) 0 0;
+  padding: var(--mm-space-5) var(--mm-space-6);
+  border: 1px solid var(--mm-warn);
+  border-left-width: var(--mm-space-1);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel-alt);
+  color: var(--mm-ink);
+  font-size: var(--mm-text-sm);
+  line-height: 1.8;
+}
+
+#sessions .error {
+  border-color: var(--mm-danger);
+}
+
+/* A failed or cached read must be mistakable for neither the muted helper text
+   beside the button nor for a live one. */
+#session-search-info {
+  color: var(--mm-ink-muted);
+  font-size: var(--mm-text-sm);
+  line-height: 1.8;
+}
+
+
+/* --------------------------------------------------------------------------
+   12. 模型连接 · 密钥与服务商预设
+   Rules are ADDED here and nowhere else; no existing selector is altered.
+   Every colour is a --mm-* token, so the dark theme follows without a second block.
+   -------------------------------------------------------------------------- */
+
+/* The write-only secret box: input + reveal toggle on one line. */
+.mm-key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--mm-space-4);
+  margin-top: var(--mm-space-4);
+}
+
+.mm-key-row input {
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mm-font-mono);
+}
+
+/* A reveal control is a control, not a submit: it keeps the base button look but
+   never grows wider than its two-character label. */
+.mm-key-toggle {
+  flex: 0 0 auto;
+  min-width: 64px;
+  padding: var(--mm-space-5) var(--mm-space-6);
+  font-size: var(--mm-text-xs);
+  color: var(--mm-ink-muted);
+  background: var(--mm-panel-alt);
+  border-color: var(--mm-line);
+}
+
+.mm-key-toggle:hover {
+  background: var(--mm-hover-bg);
+  color: var(--mm-ink);
+}
+
+.mm-key-toggle[aria-pressed="true"] {
+  background: var(--mm-accent);
+  border-color: var(--mm-accent);
+  color: var(--mm-accent-ink);
+}
+
+.mm-key-toggle:focus-visible {
+  border-color: var(--mm-focus);
+  box-shadow: 0 0 0 3px var(--mm-focus-halo);
+}
+
+/* The server's boolean key state. Three states, three colours: a missing report
+   must not read like a missing key. */
+.mm-key-state {
+  display: block;
+  margin-top: var(--mm-space-4);
+  font-size: var(--mm-text-xs);
+  line-height: 1.8;
+  color: var(--mm-ink-muted);
+}
+
+.mm-key-state.is-set {
+  color: var(--mm-ok);
+}
+
+.mm-key-state.is-unset {
+  color: var(--mm-ink-faint);
+}
+
+.mm-key-state.is-unknown {
+  color: var(--mm-warn);
+}
+
+/* Provider presets: a row of buttons, each filling url + model. */
+.mm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-space-4);
+  margin-top: var(--mm-space-4);
+}
+
+.mm-preset {
+  padding: var(--mm-space-3) var(--mm-space-6);
+  font-size: var(--mm-text-xs);
+  background: var(--mm-panel-alt);
+}
+
+.mm-preset:hover {
+  background: var(--mm-hover-bg);
+}
+
+.mm-preset-note,
+.mm-field-note {
+  display: block;
+  margin-top: var(--mm-space-4);
+  color: var(--mm-ink-muted);
+  font-size: var(--mm-text-xs);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+/* A role the backend does not accept yet: drawn, labelled, never submitted. */
+.mm-role-pending {
+  border-style: dashed;
+  border-color: var(--mm-line-strong);
+}
+
+/* Local vs cloud, said in words next to the connection select. Three states,
+   three tokens: the select alone would make the reader decode an option value. */
+.mm-mode {
+  display: block;
+  margin: var(--mm-space-2) 0 0;
+  font-size: var(--mm-text-xs);
+  line-height: 1.8;
+  color: var(--mm-ink-muted);
+}
+
+.mm-mode.is-cloud {
+  color: var(--mm-warn);
+}
+
+.mm-mode.is-local {
+  color: var(--mm-ok);
+}
+
+.mm-mode.is-off {
+  color: var(--mm-ink-faint);
+}
+
+/* Real connection-probe result cards. The card itself is .card; only the failure line needs a
+   treatment, because a probe that says "不可用" must not read like ordinary muted prose. */
+#model-probe-results .warn {
+  color: var(--mm-warn);
+  border-left: 2px solid var(--mm-warn);
+  padding-left: var(--mm-space-5);
+}
+
+#model-probe-results .card.is-online {
+  border-left: 2px solid var(--mm-ok);
+}
+
+/* The one-line explanation of how a literal key and an env var name combine. */
+#model-key-hint.mm-hint {
+  margin: var(--mm-space-8) 0 var(--mm-space-5);
+  padding: var(--mm-space-6) var(--mm-space-7);
+  border-left: 3px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel-alt);
+  color: var(--mm-ink-muted);
+  font-size: var(--mm-text-sm);
+  line-height: 1.9;
+}
+
+#model-key-hint strong {
+  color: var(--mm-ink);
+}
+
+/* Disabled on purpose until a probe route exists; the label keeps its contrast. */
+.mm-probe:disabled {
+  cursor: not-allowed;
+  background: var(--mm-disabled-bg);
+  color: var(--mm-ink-faint);
+  border-color: var(--mm-line);
+}
+
+@media (max-width: 720px) {
+  .mm-key-row {
+    flex-wrap: wrap;
+  }
+
+  .mm-key-toggle {
+    width: 100%;
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   13. Embedded workflow canvas (07 工作流可视化)
+
+   The canvas used to be a separate top-level page, so dag/styles.css assumed it owned the whole
+   viewport: html,body height:100%, .dag height:100%, .dag-body flex:1. Embedded in a scrolling
+   workbench view that would either collapse to zero height or fight the page for the window.
+
+   These rules scope it: .dag-embed gets an explicit height (a view you scroll to, not a viewport
+   you fill), the body becomes the shell's own layout, and the two bare element selectors in
+   dag/styles.css (`html,body` and `button,input,select,textarea`) are neutralised inside the
+   embed so the workbench's own form styling wins again. Everything else in dag/styles.css is
+   already namespaced under .dag-*, so it applies unchanged.
+   -------------------------------------------------------------------------- */
+
+/* The shell's section is a normal block; the canvas panel inside it owns the height. */
+#workflows > #workflow-visual {
+  display: block;
+}
+
+/* The canvas is the primary instrument of this view and sits directly under the intro; the
+   orchestration panels follow it. The slot exists so dag-embed.js has one fixed mount point
+   instead of appending to the end of the view. */
+#workflow-canvas-slot {
+  display: block;
+}
+
+.wv-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mm-space-8);
+  flex-wrap: wrap;
+  margin-bottom: var(--mm-space-8);
+}
+
+.wv-intro p {
+  margin: var(--mm-space-3) 0 0;
+  max-width: 78ch;
+}
+
+/* Height, not "100%": there is a header, orchestration panels and a footer around it, and the
+   canvas is a fixed-size instrument rather than the whole document. The clamp keeps it usable on
+   a laptop and generous on a tall display. */
+.dag-embed {
+  height: clamp(460px, 62vh, 760px);
+  min-height: 0;
+  margin-top: var(--mm-space-8);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius);
+  overflow: hidden;
+  background: var(--mm-panel);
+  /* Undo the standalone page's viewport assumptions. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* dag/styles.css sets `html,body{margin:0;height:100%}` and a bare form-control rule. Both are
+   page-level; inside the embed the workbench tokens must win, or the canvas would restyle every
+   input on the page (this stylesheet is loaded globally by dag-embed.js). */
+.dag-embed button,
+.dag-embed input,
+.dag-embed select,
+.dag-embed textarea {
+  font: inherit;
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-bar {
+  padding: var(--mm-space-6) var(--mm-space-8);
+  border-bottom: 1px solid var(--mm-line);
+  background: var(--mm-panel-alt);
+  flex: 0 0 auto;
+}
+
+.dag-embed .dag-title {
+  font-size: var(--mm-text-lg);
+  margin: 0;
+  font-weight: 600;
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dag-embed .dag-rail,
+.dag-embed .dag-inspector {
+  background: var(--mm-panel);
+  border-color: var(--mm-line);
+}
+
+.dag-embed .dag-stage {
+  background: var(--mm-bg);
+}
+
+/* The foot holds the save state and the notice; it must stay visible while the canvas scrolls. */
+.dag-embed .dag-foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--mm-line);
+  background: var(--mm-panel-alt);
+}
+
+/* dag/styles.css paints itself from its own --dagv-* palette (declared in its :root), which is a
+   light "paper console" look meant for a standalone page. Inside the workbench the same canvas must
+   read as part of the dark shell, so the embed simply re-points that palette at the workbench
+   tokens. This is a palette remap, not a fork: dag.css still owns all geometry and structure, and
+   the standalone page keeps its light palette untouched.
+
+   Node status colours (--dagv-ok/info/warn/danger) are deliberately NOT remapped one-for-one to
+   the workbench status tokens: dag.css uses them to distinguish a running node from a succeeded
+   one, which needs two distinguishable colours rather than one semantic pair. They are tuned for
+   the dark surface instead. */
+.dag-embed {
+  --dagv-canvas: var(--mm-bg);
+  --dagv-canvas-soft: var(--mm-panel-alt);
+  --dagv-surface: var(--mm-surface);
+  --dagv-row: var(--mm-panel-alt);
+  --dagv-ink: var(--mm-ink);
+  --dagv-muted: var(--mm-ink-muted);
+  --dagv-faint: var(--mm-ink-faint);
+  --dagv-line: var(--mm-line);
+  --dagv-line-strong: var(--mm-line-strong);
+  --dagv-hover: var(--mm-hover-bg);
+  --dagv-accent: var(--mm-accent);
+  --dagv-accent-hover: var(--mm-accent-hover);
+  --dagv-accent-soft: var(--mm-notice-bg);
+  --dagv-port: var(--mm-line-strong);
+  --dagv-ok: #3ecf8e;
+  --dagv-info: #59a5f5;
+  --dagv-warn: #e8a33d;
+  --dagv-warn-strong: #f5b544;
+  --dagv-danger: var(--mm-danger);
+  --dagv-danger-line: #7a3c3c;
+  --dagv-danger-soft: #2a1f1f;
+  --dagv-cycle: #b48ce0;
+  --dagv-cycle-strong: #c9a6ee;
+}
+
+.dag-embed .dag-stage {
+  background: var(--mm-bg);
+}
+
+.dag-embed .dag-svg {
+  background: var(--mm-bg);
+}
+
+.dag-embed .dag-card {
+  stroke: var(--mm-line-strong);
+}
+
+.dag-embed .dag-node:hover .dag-card,
+.dag-embed .dag-node:focus .dag-card {
+  stroke: var(--mm-accent);
+}
+
+.dag-embed .dag-node--drop .dag-card {
+  stroke: var(--mm-accent);
+  fill: var(--mm-notice-bg);
+}
+
+.dag-embed .dag-node--cycle .dag-card {
+  stroke: var(--mm-danger);
+  fill: var(--mm-panel-alt);
+}
+
+.dag-embed .dag-card-stripe {
+  fill: var(--mm-accent);
+}
+
+.dag-embed .dag-card-dot {
+  fill: var(--mm-line-strong);
+}
+
+.dag-embed .dag-card-op {
+  fill: var(--mm-ink);
+}
+
+.dag-embed .dag-card-model,
+.dag-embed .dag-card-instruction {
+  fill: var(--mm-ink-muted);
+}
+
+.dag-embed .dag-card-status {
+  fill: var(--mm-ink-faint);
+}
+
+.dag-embed .dag-node--selected .dag-card {
+  stroke: var(--mm-accent);
+}
+
+.dag-embed .dag-port {
+  fill: var(--mm-bg);
+  stroke: var(--mm-accent);
+}
+
+.dag-embed .dag-edge-line {
+  stroke: var(--mm-line-strong);
+}
+
+.dag-embed .dag-edge-hit {
+  stroke: transparent;
+}
+
+.dag-embed .dag-arrow-head {
+  fill: var(--mm-line-strong);
+}
+
+.dag-embed .dag-guide {
+  stroke: var(--mm-accent);
+}
+
+.dag-embed .dag-workflow {
+  background: var(--mm-panel-alt);
+  border-color: var(--mm-line);
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-workflow small {
+  color: var(--mm-ink-muted);
+}
+
+.dag-embed .dag-workflow--active {
+  border-color: var(--mm-accent);
+  background: var(--mm-notice-bg);
+}
+
+.dag-embed .dag-rail-head,
+.dag-embed .dag-rail-head strong,
+.dag-embed .dag-inspector h2 {
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-inspector label {
+  color: var(--mm-ink-muted);
+}
+
+.dag-embed .dag-inspector input,
+.dag-embed .dag-inspector select,
+.dag-embed .dag-inspector textarea,
+.dag-embed .dag-bar button,
+.dag-embed .dag-bar input,
+.dag-embed .dag-bar select,
+.dag-embed .dag-run input,
+.dag-embed .dag-run select {
+  background: var(--mm-field-bg);
+  border-color: var(--mm-line);
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-bar button:hover:not(:disabled) {
+  background: var(--mm-hover-bg);
+}
+
+.dag-embed .dag-bar button.dag-primary {
+  background: var(--mm-accent);
+  border-color: var(--mm-accent);
+  color: var(--mm-accent-ink);
+}
+
+.dag-embed .dag-muted,
+.dag-embed .dag-hint,
+.dag-embed .dag-state {
+  color: var(--mm-ink-muted);
+}
+
+.dag-embed .dag-hint {
+  background: var(--mm-panel-alt);
+}
+
+.dag-embed .dag-bad {
+  color: var(--mm-danger);
+}
+
+.dag-embed .dag-notice {
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-empty {
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+}
+
+.dag-embed .dag-empty h2 {
+  color: var(--mm-ink);
+}
+
+/* Table-ish inspector rows and the run panel inherit the panel surface, not white. */
+.dag-embed .dag-inspector,
+.dag-embed .dag-run {
+  background: var(--mm-panel);
+}
+
+.dag-embed .dag-rail {
+  background: var(--mm-panel);
+}
+
+.dag-embed .dag-list-items {
+  background: transparent;
+}
+
+/* The standalone page's "this page has moved" banner; never shown inside the embed. */
+.dag-redirect {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .dag-embed {
+    height: clamp(420px, 58vh, 620px);
+  }
+}
+
+/* Below this width the three-column canvas has no room; stack the rail and inspector under it.
+   The canvas keeps its own scroll/pan, so nothing becomes unusable — it just stops sharing width. */
+@media (max-width: 900px) {
+  .dag-embed .dag-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
+  .dag-embed .dag-rail {
+    order: 2;
+    border-right: 0;
+    border-top: 1px solid var(--mm-line);
+    max-height: 180px;
+  }
+
+  .dag-embed .dag-inspector {
+    order: 3;
+    border-left: 0;
+    border-top: 1px solid var(--mm-line);
+    max-height: 240px;
+    overflow: auto;
+  }
+}
+
+
+/* ==========================================================================
+   14. 检索范围 / 添加记忆两入口 / 模型类型 / 接入协议
+
+   These four blocks are the UI for features added after section 13, so they share one rule: every
+   colour resolves through an --mm-* token, and every rule is scoped to an id or a class this file
+   itself introduces. No global element selector appears here, because a bare `aside` or `button`
+   rule in this file already captured the embedded canvas once and turned a whole view white.
+   ========================================================================== */
+
+/* -- 14a 检索范围 ---------------------------------------------------------- */
+.scope-panel {
+  margin: 0 0 var(--mm-space-8);
+  padding: var(--mm-space-7);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius);
+  background: var(--mm-panel);
+}
+
+.scope-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mm-space-6);
+  flex-wrap: wrap;
+  margin-bottom: var(--mm-space-6);
+}
+
+.scope-head .eyebrow { margin: 0 0 var(--mm-space-3); }
+
+.scope-head .muted {
+  margin: 0;
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink-muted);
+}
+
+/* Four rungs, widest to narrowest. A grid keeps the ordinal columns aligned no matter how long a
+   description runs, and wraps to two columns before it ever needs a horizontal scrollbar. */
+.scope-tiers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mm-space-4);
+  margin-bottom: var(--mm-space-6);
+}
+
+.scope-tier {
+  display: grid;
+  gap: var(--mm-space-2);
+  padding: var(--mm-space-5);
+  text-align: left;
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-surface);
+  color: var(--mm-ink);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+
+.scope-tier:hover { border-color: var(--mm-accent); }
+
+.scope-tier.is-active {
+  border-color: var(--mm-accent);
+  background: var(--mm-panel);
+}
+
+.scope-tier.is-unavailable {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.scope-tier-title {
+  font-size: var(--mm-text-base);
+  font-weight: 500;
+}
+
+.scope-tier-count {
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-xl);
+  color: var(--mm-accent);
+}
+
+.scope-tier-desc {
+  font-size: var(--mm-text-xs);
+  line-height: 1.6;
+  color: var(--mm-ink-muted);
+}
+
+.scope-space,
+.scope-conversation {
+  display: grid;
+  gap: var(--mm-space-4);
+  padding-top: var(--mm-space-5);
+  border-top: 1px solid var(--mm-line);
+}
+
+.scope-space { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+.scope-conversation { grid-template-columns: minmax(0, 1fr); }
+
+@media (max-width: 1100px) {
+  .scope-tiers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scope-space { grid-template-columns: minmax(0, 1fr); }
+}
+
+.scope-field {
+  display: grid;
+  gap: var(--mm-space-2);
+  font-size: var(--mm-text-sm);
+  color: var(--mm-ink-muted);
+}
+
+.scope-field input,
+.scope-field select {
+  width: 100%;
+  padding: var(--mm-space-3) var(--mm-space-4);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font: inherit;
+}
+
+.scope-space .row { grid-column: 1 / -1; align-items: center; }
+
+/* -- 14b 添加记忆：两个入口 ------------------------------------------------- */
+.capture-tabs {
+  display: flex;
+  gap: var(--mm-space-2);
+  margin-bottom: var(--mm-space-6);
+  border-bottom: 1px solid var(--mm-line);
+}
+
+.capture-tab {
+  padding: var(--mm-space-3) var(--mm-space-5);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--mm-ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.capture-tab:hover { color: var(--mm-ink); }
+
+.capture-tab.is-active {
+  border-bottom-color: var(--mm-accent);
+  color: var(--mm-ink);
+  font-weight: 500;
+}
+
+.capture-pane { display: block; }
+
+/* The drop zone is a <label> around the file input, so a click opens the picker with no JS. It has
+   to look like a target: dashed border, generous height, and a state that says "drop here". */
+.drop-zone {
+  display: grid;
+  justify-items: center;
+  gap: var(--mm-space-2);
+  padding: var(--mm-space-9) var(--mm-space-6);
+  margin-bottom: var(--mm-space-5);
+  border: 1px dashed var(--mm-line-strong);
+  border-radius: var(--mm-radius);
+  background: var(--mm-bg);
+  color: var(--mm-ink-muted);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+
+.drop-zone:hover,
+.drop-zone.is-over {
+  border-color: var(--mm-accent);
+  background: var(--mm-panel);
+  color: var(--mm-ink);
+}
+
+.drop-zone.is-over { box-shadow: inset 0 0 0 1px var(--mm-accent); }
+
+.drop-zone strong {
+  font-size: var(--mm-text-base);
+  font-weight: 500;
+  color: var(--mm-ink);
+}
+
+.drop-zone-icon {
+  font-size: var(--mm-text-2xl);
+  line-height: 1;
+  color: var(--mm-accent);
+}
+
+/* -- 14c 模型类型 ---------------------------------------------------------- */
+.model-types {
+  display: grid;
+  gap: var(--mm-space-3);
+}
+
+.model-type-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--mm-space-5);
+  align-items: center;
+  padding: var(--mm-space-5);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-surface);
+}
+
+@media (max-width: 1000px) {
+  .model-type-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+.model-type-title { display: grid; gap: var(--mm-space-1); }
+.model-type-title strong { font-size: var(--mm-text-base); font-weight: 500; }
+.model-type-title small,
+.model-type-row > small {
+  font-size: var(--mm-text-xs);
+  line-height: 1.6;
+  color: var(--mm-ink-muted);
+}
+
+.model-type-row select {
+  width: 100%;
+  padding: var(--mm-space-3) var(--mm-space-4);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font: inherit;
+}
+
+.model-type-bound { color: var(--mm-ok); }
+.model-type-unbound { color: var(--mm-warn); }
+
+/* -- 14d 接入协议 / 在线智能体 ---------------------------------------------- */
+.protocol-entry {
+  display: block;
+  margin: var(--mm-space-3) 0;
+  padding: var(--mm-space-3) var(--mm-space-4);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-bg);
+  color: var(--mm-ink-muted);
+  font-family: var(--mm-font-mono);
+  font-size: var(--mm-text-xs);
+  word-break: break-all;
+}
+
+/* An online agent is the one thing on this page a user scans for, so it gets a real marker rather
+   than only a word: a left rule in the success colour, matching how the canvas marks a live node. */
+.card.is-online { border-left: 2px solid var(--mm-ok); }
+
+.card .pill.is-ok {
+  border-color: var(--mm-ok);
+  color: var(--mm-ok);
+}
+
+/* The header pill carries the same two states as the cards: a recorded peer that is outside its
+   ttl is not an error, but it is not "online" either, so it reads as a warning rather than either
+   extreme. Without this the pill inherited the neutral surface and the word 未在线 looked like
+   ordinary chrome. */
+.pill.is-ok {
+  border-color: var(--mm-ok);
+  color: var(--mm-ok);
+}
+
+.pill.is-warn {
+  border-color: var(--mm-warn);
+  color: var(--mm-warn);
+}
+
+/* -- 14e 脑图预览开关 ----------------------------------------------------- */
+/* An active preview must LOOK different from real data, not merely be labelled: a filled accent
+   edge on the control plus the persistent note above the canvas. */
+#brain-preview-toggle.is-active {
+  border-color: var(--mm-accent);
+  color: var(--mm-accent);
+}
+
+#brain-preview-toggle:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+#brain-preview-note {
+  margin: 0 0 var(--mm-space-4);
+  padding: var(--mm-space-4) var(--mm-space-5);
+  border: 1px solid var(--mm-warn);
+  border-left-width: var(--mm-space-1);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel);
+  color: var(--mm-ink);
+  font-size: var(--mm-text-sm);
+  line-height: 1.7;
+}
+
+/* A quieter note than the demo-data banner: this one explains a disabled combination (星云关系图
+   has no 2D form), it is not a warning about the data being shown. Same shape, neutral colour, so
+   the two stacked notes do not read as two alarms. */
+/* A prose note under the toolbar, on its own full-width line. It lives OUTSIDE .section-title
+   (that is a two-column flex row) so it can never squeeze the intro paragraph. */
+#brain-dimension-note {
+  margin: var(--mm-space-3) 0 var(--mm-space-4);
+  padding: var(--mm-space-4) var(--mm-space-5);
+  border: 1px solid var(--mm-line);
+  border-left-width: var(--mm-space-1);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-panel);
+  color: var(--mm-ink-muted);
+  font-size: var(--mm-text-sm);
+  line-height: 1.7;
+}

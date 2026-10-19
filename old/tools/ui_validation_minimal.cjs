@@ -1,0 +1,63 @@
+// Isolated synthetic UI validation. No user data or external model calls.
+const {app,BrowserWindow}=require('electron');
+const {spawn,spawnSync}=require('node:child_process');
+const fs=require('node:fs');const os=require('node:os');const path=require('node:path');
+const root=path.resolve(__dirname,'..'),out=path.join(root,'artifacts/ui-1.1.0');
+const data=fs.mkdtempSync(path.join(os.tmpdir(),'memora-ui-'));
+app.setPath('userData',path.join(data,'electron'));
+const python=path.join(root,'.venv/Scripts/python.exe');
+let backend;const delay=ms=>new Promise(r=>setTimeout(r,ms));
+async function main(){
+ await app.whenReady();fs.mkdirSync(out,{recursive:true});
+ const seed=spawnSync(python,['-c',`from memora.store import Store\nfrom memora.documents import Documents\nfrom memora.control import Control\nimport sys\ns=Store(sys.argv[1]);nodes=[]\nfor title in ['SQLite 事务是持久记忆的基础','向量检索查找语义相似的记忆','Judge 提供分类与持久性判定','Markdown 保存不可变文档版本','偏好：用户喜欢简洁的回答','经验：失败时保留可重试的候选']:\n nodes.append(s.capture('demo',title,'synthetic:ui',mode='manual',confirmed=True))\ns.link('demo',nodes[0]['id'],nodes[1]['id'],'supports')\nControl(s).hierarchy_link('demo',nodes[0]['id'],nodes[1]['id'],'prerequisite','Synthetic learning sequence')\nd=Documents(s);v=d.put('demo','daily','human','演示日期文档','# 日期记忆\\n\\n这是隔离测试内容。',0,recorded_date='2026-10-01');d.publish('demo','daily','human',1)\ns.flush()`,data],{cwd:root,windowsHide:true,encoding:'utf-8'});
+ if(seed.status!==0)throw new Error(seed.stderr);
+ backend=spawn(python,['-m','memora','--data',data,'serve','--port','0'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
+ const base=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(new Error('Backend timeout')),20000);backend.stdout.on('data',b=>{text+=b;const m=text.match(/http:\/\/127\.0\.0\.1:\d+/);if(m){clearTimeout(timer);resolve(m[0]);}});backend.once('exit',c=>reject(new Error('Backend exited '+c)));});
+ const win=new BrowserWindow({show:false,width:1500,height:1000,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,offscreen:true,backgroundThrottling:false}});
+ const errors=[],checks=[];
+ win.webContents.on('console-message',(...args)=>{const detail=args[1];if(detail&&typeof detail==='object'&&detail.level==='error')errors.push(detail.message);});
+ win.webContents.on('render-process-gone',()=>errors.push('render process gone'));
+ await win.loadURL(base+'/?project=demo');await delay(500);const js=s=>win.webContents.executeJavaScript(s);
+ if(await js('project()')!=='demo')throw new Error('Project deep link was not applied');
+ await js(`$('project').value='demo';$('project').dispatchEvent(new Event('change'))`);await delay(200);
+ for(const view of ['retrieve','inbox','agents','documents','settings','workflows']){await js(`show('${view}')`);await delay(120);checks.push(await js(`({view:state.view,title:$('heading').textContent,visible:!$('${view}').hidden})`));}
+ await js(`show('workflows')`);checks.push(await js(`({roles:document.querySelectorAll('#role-bindings select').length,workflowOperations:document.querySelector('[data-stage] select')?.options.length})`));await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'orchestration.png'),i.toPNG()));
+ await js(`api('models',{registry:{models:[{id:'local-fixture',name:'UI fixture',model:'no-inference-fixture',kind:'ollama',base:'http://127.0.0.1:11434',remote:false}],bindings:{}}})`);await js(`loadOrchestration()`);
+ await js(`$('registry-form').requestSubmit()`);await delay(250);
+ const protocol=await js(`api('models').then(r=>r.models[0].kind)`);if(protocol!=='ollama')throw new Error('Registry editor lost the model protocol');checks.push({registryProtocolPreserved:protocol});
+ await js(`$('workflow-title').value='UI workflow';$('workflow-form').requestSubmit()`);await delay(250);
+ await js(`(()=>{const b=[...document.querySelectorAll('#saved-workflows button')].find(b=>b.textContent==='编辑');if(!b)throw new Error('No workflow edit action');b.click()})()`);
+ await js(`$('workflow-title').value='Edited UI workflow';$('workflow-form').requestSubmit()`);await delay(250);
+ const workflowCheck=await js(`api('workflows').then(r=>({count:r.items.length,title:r.items[0]?.title}))`);if(workflowCheck.count!==1||workflowCheck.title!=='Edited UI workflow')throw new Error('Workflow edit created an extra definition');checks.push({workflowEditing:workflowCheck});
+ await js(`show('inbox')`);await js(`$('capture-content').value='偏好：保留日期并使用简洁回答。';$('capture-form').requestSubmit()`);await delay(500);
+ checks.push(await js(`({capture:document.querySelector('#queue .content')?.textContent,classification:document.querySelector('#queue')?.textContent.includes('rules')})`));
+ await js(`(()=>{const b=[...document.querySelectorAll('#queue button')].find(e=>e.textContent==='确认沉淀');if(!b)throw new Error('No review button');b.click()})()`);await delay(500);
+ await js(`show('retrieve')`);await js(`$('query').value='简洁';$('search-form').requestSubmit()`);await delay(400);
+ checks.push(await js(`({retrieved:document.querySelectorAll('#results .card').length,mode:$('search-info').textContent})`));
+ await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'retrieval.png'),i.toPNG()));
+ await js(`show('documents');`);await js(`openDocument('daily','human')`);await delay(150);
+ checks.push(await js(`({documentDate:$('doc-date').value,documentVersion:state.document.version,content:$('doc-content').value})`));
+ await js(`$('doc-content').value+='\\n\\n新增的文档版本。';$('document-form').requestSubmit()`);await delay(400);
+ checks.push(await js(`({savedDocumentVersion:state.document.version,datePreserved:$('doc-date').value==='2026-10-01'})`));
+ await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'markdown.png'),i.toPNG()));
+ await js(`show('settings');`);await js(`$('embedding-connection').value='cloud';$('embedding-connection').dispatchEvent(new Event('change'))`);
+ checks.push(await js(`({cloudEndpointEmpty:$('embedding-url').value==='',cloudPlaceholder:$('embedding-url').placeholder})`));
+ await js(`show('brain')`);await delay(1500);
+ let frame=win.webContents.mainFrame.frames.find(f=>f.url.includes('/brain/dictionary/'));
+ for(let retry=0;retry<40;retry++){if(await frame.executeJavaScript('dictionaryGraph.searchEntries.length>0'))break;await delay(250);}
+ checks.push(await frame.executeJavaScript(`(()=>{if(!dictionaryGraph.searchEntries.length)throw new Error('No dictionary nodes');dictionaryGraph.select(0,true);return {dictionaryNodes:dictionaryGraph.searchEntries.length,layouts:dictionaryGraph.layoutChoices.length}})()`));await delay(2000);
+ await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'dictionary-3d.png'),i.toPNG()));
+ await js(`$('brain-type').value='outline';brain()`);await delay(1700);
+ frame=win.webContents.mainFrame.frames.find(f=>f.url.includes('/brain/outline/'));
+ checks.push(await frame.executeJavaScript(`(()=>{mindMap.selectById(mindMap.nodeIds[2],true);return {outlineNodes:mindMap.nodeCount,layouts:mindMap.layoutChoices.length}})()`));await delay(1600);
+ await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'hierarchy-3d.png'),i.toPNG()));
+ await js(`$('brain-dimension').value='2d';brain()`);await delay(600);
+ checks.push({planeLoaded:win.webContents.mainFrame.frames.some(f=>f.url.includes('/brain/plane/'))});
+ await win.webContents.capturePage().then(i=>fs.writeFileSync(path.join(out,'hierarchy-2d.png'),i.toPNG()));
+ if(checks.find(c=>c.savedDocumentVersion)?.savedDocumentVersion!==2)errors.push('Markdown did not save v2');
+ if(!checks.find(c=>c.retrieved)?.retrieved)errors.push('No retrieval result');
+ const report={version:'1.1.0',synthetic_data_only:true,checks,console_errors:errors};
+ fs.writeFileSync(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+ if(errors.length)throw new Error(JSON.stringify(errors));win.destroy();backend.kill();app.quit();
+}
+main().catch(e=>{console.error(e.stack);if(backend)backend.kill();app.exit(1);});

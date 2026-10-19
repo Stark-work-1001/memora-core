@@ -1,0 +1,20 @@
+Memora 1.1.0
+Copyright 2026 Stark-work-1001 and contributors.
+New Memora contributions: Apache License, Version 2.0.
+
+This distribution includes Memory Merge (MIT), Copyright 2026 Stark-work-1001.
+The original MIT license is retained at LICENSES/Memory-Merge-MIT.txt.
+
+Copied user-supplied Dictionary Graph and 3D Mind Map components retain their MIT licenses
+under frontend/vendor/. Their original source directories were not modified.
+The inherited physics layout credits Obsidian 3D Graph, Copyright 2025 Aryan Gupta.
+three.js, KaTeX, Rust/WASM crates and other dependencies retain their licenses.
+
+Modified copies: external Markdown link scheme allowlist; compiler-home path removal
+from embedded WASM; Memora host adapters and memory data projections.
+The upstream AI Coding Dictionary dataset and website content are not redistributed.
+
+Complete project/repository links and use classifications are in both READMEs,
+docs/OPEN_SOURCE_REUSE.md, docs/DEPENDENCIES.md and THIRD_PARTY_NOTICES.md.
+
+Copied UI changes: explicit body-line wiki links, refreshed graph counts, personal-scale visual defaults, and initialized scene background for readable labels.

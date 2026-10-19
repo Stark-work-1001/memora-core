@@ -1,0 +1,62 @@
+{
+  "project": "memora",
+  "version": "1.0.1",
+  "source_files": 322,
+  "desktop_files": 338,
+  "source_tests": {
+    "tests": 136,
+    "skipped": 1,
+    "passed": true
+  },
+  "unpacked_tests": {
+    "tests": 136,
+    "skipped": 1,
+    "passed": true
+  },
+  "frontend_tests": {
+    "tests": 6,
+    "passed": true
+  },
+  "privacy_findings": [],
+  "source_reproducible": true,
+  "assets": [
+    {
+      "name": "memora-1.0.1-source.zip",
+      "bytes": 1559153,
+      "sha256": "2c27ff72869db4f991eee8b5f6ef736e9b125c498fcb0b89008c4bb7b1fbdc29"
+    },
+    {
+      "name": "memora-1.0.1-windows-x64.zip",
+      "bytes": 177128845,
+      "sha256": "39ba843fa7ebbdff873c5e29904a9c20e322941bfcce035b8b050e63ae9f9364"
+    }
+  ],
+  "limits": [
+    "Pattern scans cannot identify every private identifier.",
+    "Live cloud and GGUF inference require operator configuration and were not exercised.",
+    "Platform validation is limited to the build machine; CI is configured separately."
+  ],
+  "http_bridge": {
+    "unauthorized_denied": true,
+    "mcp_initialize": true,
+    "peer_heartbeat_roundtrip": true,
+    "tools": 22
+  },
+  "desktop_smoke": {
+    "version": "1.0.1",
+    "external_runtimes_removed_from_path": true,
+    "frozen_http_routes": 15,
+    "rust_kernel_required": true,
+    "mcp": {
+      "tools": 29,
+      "peer_archive_append": true,
+      "document_draft_exchange": true,
+      "review_tools_exposed": false
+    },
+    "electron_window_loaded": true,
+    "frozen_bytecode": {
+      "checked_code_objects": 25934,
+      "private_code_filenames": 0
+    }
+  }
+}

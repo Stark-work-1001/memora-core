@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-19T07:14:43.164009+00:00",
+  "workspace": "<project root>",
+  "source_revision": "e7c0f977b22d31b26a3d00225b00cc976148a0250dd1522e77dd9adacb908669",
+  "edition": "development-unreleased",
+  "standalone_synchronized": false,
+  "standalone_written": false,
+  "live_user_memory_migrated": false,
+  "python": {
+    "tests": 584,
+    "failures": 0,
+    "errors": 0,
+    "skipped": [
+      [
+        "test_connector_heartbeat_survives_composition (tests.test_dsh_profile_composition.LiveProfileComposition.test_connector_heartbeat_survives_composition)",
+        "no DSH profile at <DSH install dir>"
+      ],
+      [
+        "test_installed_llm_module_exists (tests.test_dsh_profile_composition.LiveProfileComposition.test_installed_llm_module_exists)",
+        "no DSH profile at <DSH install dir>"
+      ],
+      [
+        "test_no_duplicate_memory_connector_row (tests.test_dsh_profile_composition.LiveProfileComposition.test_no_duplicate_memory_connector_row)",
+        "no DSH profile at <DSH install dir>"
+      ],
+      [
+        "test_owned_blocks_are_id_overrides (tests.test_dsh_profile_composition.LiveProfileComposition.test_owned_blocks_are_id_overrides)",
+        "no DSH profile at <DSH install dir>"
+      ],
+      [
+        "test_pdf_pages_become_cited_chunks (tests.test_ingest_sync_sessions.PdfImportTests.test_pdf_pages_become_cited_chunks)",
+        "pypdf not installed (optional extra)"
+      ]
+    ],
+    "elapsed_seconds": 118.25,
+    "passed": true
+  },
+  "frontend": {
+    "tests": 130,
+    "passed": 130
+  },
+  "dsh_adapter": {
+    "tests": 4,
+    "passed": 4
+  },
+  "quality": {
+    "ruff": "passed",
+    "mypy": "passed",
+    "typescript": "passed",
+    "powershell_syntax": "passed"
+  },
+  "build": {
+    "scope": "dist/memora-backend only",
+    "passed": true
+  },
+  "frozen_mcp": {
+    "mcp_tools": 26,
+    "templates": 8,
+    "knowledge_context": "ok",
+    "same_volume_sqlite_temp": true,
+    "data": "temporary-only",
+    "standalone_updated": false
+  },
+  "manual_browser": [
+    "unified search across memories/documents/sessions with typed trust",
+    "load and save branched audit template",
+    "document evidence from real document chunk index",
+    "restore selected memory from 3D to 2D and back",
+    "3D label cleanup keeps source ID"
+  ],
+  "screenshots": [
+    "workflows.jpg",
+    "brain-2d.jpg",
+    "brain-3d.jpg"
+  ],
+  "limits": [
+    "Real DSH profile is absent; no live host reload was performed.",
+    "Generation quality tests use deterministic fixtures; no new model weights or remote paid calls.",
+    "Optional pypdf is not installed.",
+    "Pre-existing Windows HTTP fixture shutdown noise remains in logs.",
+    "Graph rendering is not claimed pixel-identical to the reference site."
+  ]
+}

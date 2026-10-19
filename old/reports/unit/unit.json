@@ -1,0 +1,29 @@
+{
+  "tests": 584,
+  "failures": 0,
+  "errors": 0,
+  "skipped": [
+    [
+      "test_connector_heartbeat_survives_composition (tests.test_dsh_profile_composition.LiveProfileComposition.test_connector_heartbeat_survives_composition)",
+      "no DSH profile at <DSH install dir>"
+    ],
+    [
+      "test_installed_llm_module_exists (tests.test_dsh_profile_composition.LiveProfileComposition.test_installed_llm_module_exists)",
+      "no DSH profile at <DSH install dir>"
+    ],
+    [
+      "test_no_duplicate_memory_connector_row (tests.test_dsh_profile_composition.LiveProfileComposition.test_no_duplicate_memory_connector_row)",
+      "no DSH profile at <DSH install dir>"
+    ],
+    [
+      "test_owned_blocks_are_id_overrides (tests.test_dsh_profile_composition.LiveProfileComposition.test_owned_blocks_are_id_overrides)",
+      "no DSH profile at <DSH install dir>"
+    ],
+    [
+      "test_pdf_pages_become_cited_chunks (tests.test_ingest_sync_sessions.PdfImportTests.test_pdf_pages_become_cited_chunks)",
+      "pypdf not installed (optional extra)"
+    ]
+  ],
+  "elapsed_seconds": 118.25,
+  "passed": true
+}

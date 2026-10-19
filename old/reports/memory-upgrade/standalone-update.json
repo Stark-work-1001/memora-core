@@ -1,0 +1,16 @@
+{
+  "standalone_updated": true,
+  "product": "<standalone dir>",
+  "remote_model_calls": false,
+  "existing_data_files_unchanged": 9,
+  "backup": "<project root>\\artifacts\\standalone-backups\\20261019-152048",
+  "backend_files_match_development_build": 332,
+  "backend_sha256": "de197a25be704d941a7369c60a0a2ac585c92d55276378b2b800267797e14019",
+  "version": "1.3.0",
+  "mcp_tools": 26,
+  "workflow_templates": 8,
+  "unified_context": true,
+  "desktop_ready_without_external_runtimes": true,
+  "http_workbench_brain_workflow_setup": true,
+  "passed": true
+}

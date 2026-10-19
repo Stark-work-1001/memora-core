@@ -1,0 +1,6 @@
+{
+  "unauthorized_denied": true,
+  "mcp_initialize": true,
+  "peer_heartbeat_roundtrip": true,
+  "tools": 22
+}

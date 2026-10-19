@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "files_checked": 617,
+  "findings": [],
+  "bytecode": {
+    "checked_code_objects": 25864,
+    "private_code_filenames": 0
+  }
+}

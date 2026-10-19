@@ -1,0 +1,15 @@
+# Development-only tooling. NOT installed by `pip install -r requirements.txt`, and NOT part of
+# the runtime image or the frozen desktop bundle -- these tools lint and type-check source, they do
+# not run inside the product.
+#
+#   .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+#
+# Both are pinned exactly. An unpinned linter is a moving target: ruff adds rules between releases,
+# so a floating version turns "the tree is clean" into a statement about the day someone ran it.
+# When you bump one of these, re-run the full suite from docs/QUALITY.md before committing.
+#
+# numbers for the current pins, measured on this tree:
+#   ruff 0.17.1   -> ruff check .            : All checks passed
+#   mypy 2.4.0    -> mypy                    : Success: no issues found in 66 source files
+ruff==0.17.1
+mypy==2.4.0

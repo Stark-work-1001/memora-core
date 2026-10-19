@@ -1,0 +1,19 @@
+{
+  "version": "1.2.0",
+  "file": "memora-1.2.0-windows-x64.zip",
+  "sha256": "963ae6fab6a56da6ec86bbd1e895bbe531686cf425a9ae31e05f1e0a2a6707ba",
+  "bytes": 176800751,
+  "profile": "standalone-portable",
+  "unpack_and_run": true,
+  "bundled_data": [
+    "data/memory.sqlite3 (empty, schema v2)",
+    "data/markdown/",
+    "data/memora.json (empty template)"
+  ],
+  "desensitized": {
+    "files": 262,
+    "key_patterns": 0,
+    "credentials": 0
+  },
+  "packaged": "2026-10-17T15:39:01.508311+00:00"
+}

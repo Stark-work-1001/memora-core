@@ -1,0 +1,217 @@
+[
+  {
+    "check": "six top-level directories, exact set",
+    "ok": true,
+    "detail": ".venv,build,data,desktop-standalone,devel,release"
+  },
+  {
+    "check": "product root has Memora.exe",
+    "ok": true,
+    "detail": "245589504 bytes"
+  },
+  {
+    "check": "product root has resources/app.asar",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "product root has resources/backend/memora-backend.exe",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "product ships its own data template",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no duplicate/nested product dir: win-unpacked",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no duplicate/nested product dir: release-win-unpacked",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no duplicate/nested product dir: memora-data",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no duplicate/nested product dir: desktop",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no packer debug droppings in product",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "product tree hash == smoke report",
+    "ok": true,
+    "detail": "335fe29e3578b96e / 320 files"
+  },
+  {
+    "check": "backend sha256 == smoke report",
+    "ok": true,
+    "detail": "db93b0237c05e9e2"
+  },
+  {
+    "check": "smoke report says passed",
+    "ok": true,
+    "detail": "version 1.3.0"
+  },
+  {
+    "check": "smoke report: desktop launches",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "live database integrity",
+    "ok": true,
+    "detail": "ok"
+  },
+  {
+    "check": "live memories preserved",
+    "ok": true,
+    "detail": "914"
+  },
+  {
+    "check": "live documents preserved",
+    "ok": true,
+    "detail": "51"
+  },
+  {
+    "check": "live markdown mirrors preserved",
+    "ok": true,
+    "detail": "914"
+  },
+  {
+    "check": "memory backups live under data/",
+    "ok": true,
+    "detail": "legacy-memory-20261017"
+  },
+  {
+    "check": "release zip + sha256 exist",
+    "ok": true,
+    "detail": "memora-1.3.0-windows-x64.zip,memora-1.3.0-windows-x64.zip.sha256"
+  },
+  {
+    "check": "release zip sha256 matches sidecar",
+    "ok": true,
+    "detail": "a342dd0d82f9817f"
+  },
+  {
+    "check": "release zip integrity",
+    "ok": true,
+    "detail": "320 entries"
+  },
+  {
+    "check": "zip contains Memora.exe",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains resources/app.asar",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains resources/backend/memora-backend.exe",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains data/memory.sqlite3",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains data/memora.json",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains data/markdown/.gitkeep",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains Launch-Memora.cmd",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains Launch-Memora.ps1",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip contains Repair-Desktop.ps1",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "zip ships NO user memories",
+    "ok": true,
+    "detail": "0"
+  },
+  {
+    "check": "historical packages retained",
+    "ok": true,
+    "detail": "memora-1.0.0-windows-x64.zip,memora-1.0.1-windows-x64.zip,memora-1.0.2-windows-x64.zip,memora-1.1.0-windows-x64.zip,memora-1.2.0-windows-x64.zip"
+  },
+  {
+    "check": "source lives under devel/",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "electron shell source under devel/desktop",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no source left at project root",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "CI config under devel/.github",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "no stale build paths in runnable source",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "check": "build_desktop anchors: DEVEL",
+    "ok": true,
+    "detail": "<project root>"
+  },
+  {
+    "check": "build_desktop anchors: PROJECT",
+    "ok": true,
+    "detail": "<project root>"
+  },
+  {
+    "check": "build_desktop anchors: PRODUCT",
+    "ok": true,
+    "detail": "<project root>\\desktop-standalone"
+  },
+  {
+    "check": "build_desktop anchors: backend input",
+    "ok": true,
+    "detail": "<project root>\\build\\dist\\memora-backend"
+  },
+  {
+    "check": "default_data_dir() resolves the live store from any cwd",
+    "ok": true,
+    "detail": "<data dir>"
+  }
+]

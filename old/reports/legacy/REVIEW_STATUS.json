@@ -1,0 +1,27 @@
+{
+  "project": "memora",
+  "version": "1.0.0",
+  "upload_status": "awaiting_user_approval",
+  "destination": "https://github.com/Stark-work-1001/memora",
+  "source_files": 300,
+  "original_graph_files_checked": 145,
+  "original_graph_mismatches": [],
+  "privacy_findings": [],
+  "validated_assets": [
+    {
+      "name": "memora-1.0.0-source.zip",
+      "bytes": 1464025,
+      "sha256": "b25189778b7d9b554f080a788e0f2a43bf0d7de72e1a4d683b74e065c12a6c7f"
+    },
+    {
+      "name": "memora-1.0.0-windows-x64.zip",
+      "bytes": 176864871,
+      "sha256": "401878b05c2a49156ccf3c09ff83f52dfece2e7fed732b4f44dffad1a0061a9d"
+    }
+  ],
+  "notes": [
+    "No project source or release assets have been uploaded.",
+    "No real user conversations, memory databases, source configurations, model weights or credentials are included.",
+    "Live cloud and GGUF inference remain operator-configured and untested."
+  ]
+}

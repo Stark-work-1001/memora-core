@@ -1,0 +1,345 @@
+{
+  "root": "<project root>",
+  "versions": {
+    "source": "1.3.0",
+    "packaged": "1.3.0",
+    "release_zip_newest": "1.2.0"
+  },
+  "top_level": {
+    ".venv": {
+      "files": 7030,
+      "bytes": 110052150
+    },
+    "build": {
+      "files": 168,
+      "bytes": 54598355
+    },
+    "data": {
+      "files": 1471,
+      "bytes": 36070257
+    },
+    "desktop-standalone": {
+      "files": 7198,
+      "bytes": 1600996551
+    },
+    "devel": {
+      "files": 32439,
+      "bytes": 3927033605
+    },
+    "release": {
+      "files": 11,
+      "bytes": 888003594
+    },
+    ".git": {
+      "files": 756,
+      "bytes": 3461136
+    },
+    ".github": {
+      "files": 5,
+      "bytes": 4788
+    },
+    ".pytest_cache": {
+      "files": 5,
+      "bytes": 60904
+    }
+  },
+  "key_hashes": {
+    "desktop-standalone/win-unpacked/resources/backend/memora-backend.exe": {
+      "exists": true,
+      "sha256": "3766e1325b9d9520e91f5643cd7a9fab0fcd788303a3aa11e71a1031f7f5df13",
+      "bytes": 7439601
+    },
+    "desktop-standalone/win-unpacked/resources/app.asar": {
+      "exists": true,
+      "sha256": "ce00a788df4403216bd6efe96089e0786f0f030362527a866b2625d355f190d9",
+      "bytes": 7671
+    },
+    "desktop-standalone/win-unpacked/Memora.exe": {
+      "exists": true,
+      "sha256": "ff257e8877a075b122802078f4783a0d3dd65b92526b633262ec5128610e33e0",
+      "bytes": 245589504
+    },
+    "desktop-standalone/main.cjs": {
+      "exists": true,
+      "sha256": "daecb9889e8c4cc6bf15a6f80ebcb2014452446a9a7d7b916260b5dc4967f605",
+      "bytes": 6937
+    },
+    "desktop-standalone/package.json": {
+      "exists": true,
+      "sha256": "470673f69e818e084b829e441a38ab255cbbf8ddae70455d0c248c1339373ecd",
+      "bytes": 963
+    },
+    "devel/memora/__init__.py": {
+      "exists": true,
+      "sha256": "20ddee7a45240b06478d2dba33c0c69fff43307f39b7969088dd12f6cb69cf94",
+      "bytes": 100
+    },
+    "devel/pyproject.toml": {
+      "exists": true,
+      "sha256": "d369743163dec809936d6ee869d74de00f4d9564fe0b7b667ad763533206d482",
+      "bytes": 3865
+    },
+    "data/memory.sqlite3": {
+      "exists": true,
+      "sha256": "35eb74f3f0993dae1cc3433a7dd3e812e4d63634ab408f15368a7dbd3d4619a9",
+      "bytes": 23916544
+    },
+    "data/memora.json": {
+      "exists": true,
+      "sha256": "6b042754f1be6e4aeb6241f558a8535d12783dd00667f88972c34c472c051313",
+      "bytes": 983
+    }
+  },
+  "destinations": {
+    "product_win_unpacked": {
+      "files": 271,
+      "bytes": 423586317
+    },
+    "product_backend_dir": {
+      "files": 187,
+      "bytes": 38481133
+    },
+    "product_release_win_unpacked": {
+      "files": 280,
+      "bytes": 424041125
+    },
+    "devel_artifacts": {
+      "files": 17596,
+      "bytes": 2049881690
+    },
+    "devel_runtime": {
+      "files": 11490,
+      "bytes": 1594938099
+    },
+    "devel_frontend": {
+      "files": 2323,
+      "bytes": 76032400
+    },
+    "devel_native": {
+      "files": 593,
+      "bytes": 198359079
+    },
+    "product_win_unpacked_tree": {
+      "sha256": "847320c426699392ef6e235a54bd78fd6ee7acbbd5cb8a42ea5edc39111c54ce",
+      "files": 271
+    }
+  },
+  "source_layout": {
+    "tracked_in_head": 456,
+    "identical_under_devel": 312,
+    "changed_under_devel": 132,
+    "missing_under_devel": [
+      ".github/ISSUE_TEMPLATE/bug_report.yml",
+      ".github/ISSUE_TEMPLATE/config.yml",
+      ".github/ISSUE_TEMPLATE/feature_request.yml",
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      ".github/workflows/ci.yml",
+      "desktop/Launch-Memora.cmd",
+      "desktop/Launch-Memora.ps1",
+      "desktop/Repair-Desktop.cmd",
+      "desktop/Repair-Desktop.ps1",
+      "desktop/main.cjs",
+      "desktop/package-lock.json",
+      "desktop/package.json"
+    ],
+    "head_top_level": [
+      ".dockerignore",
+      ".gitattributes",
+      ".github",
+      ".gitignore",
+      "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "Dockerfile",
+      "LICENSE",
+      "LICENSE-STATUS.md",
+      "LICENSES",
+      "NOTICE",
+      "PRIVACY.md",
+      "README.md",
+      "README.zh-CN.md",
+      "RELEASE_NOTES.en.md",
+      "RELEASE_NOTES.zh-CN.md",
+      "SECURITY.md",
+      "Start-Memora.cmd",
+      "THIRD_PARTY_NOTICES.md",
+      "bench",
+      "datasets",
+      "deployment",
+      "desktop",
+      "dev-serve.ps1",
+      "docs",
+      "frontend",
+      "integrations",
+      "memora",
+      "memory_merge",
+      "native",
+      "pyproject.toml",
+      "requirements-lock.txt",
+      "requirements.txt",
+      "start-memora.ps1",
+      "tests",
+      "tools"
+    ]
+  },
+  "data": {
+    "memora-control.sqlite3": {
+      "bytes": 118784,
+      "rows": {
+        "peers": 4,
+        "workflows": 5,
+        "runs": 2,
+        "events": 2,
+        "sqlite_sequence": 1
+      }
+    },
+    "memora-documents.sqlite3": {
+      "bytes": 425984,
+      "rows": {
+        "docs": 34,
+        "revisions": 34,
+        "revision_metadata": 34,
+        "doc_meta": 6,
+        "doc_chunks": 3,
+        "doc_chunk_fts": 3,
+        "doc_chunk_fts_data": 3,
+        "doc_chunk_fts_idx": 1,
+        "doc_chunk_fts_content": 3,
+        "doc_chunk_fts_docsize": 3,
+        "doc_chunk_fts_config": 1,
+        "doc_chunk_embeddings": 3,
+        "doc_models": 1
+      }
+    },
+    "memora-jobs.sqlite3": {
+      "bytes": 86016,
+      "rows": {
+        "jobs": 32
+      }
+    },
+    "memory.sqlite3": {
+      "bytes": 23916544,
+      "rows": {
+        "memories": 914,
+        "audit": 1865,
+        "edges": 15,
+        "meta": 62,
+        "documents": 51,
+        "sessions": 19,
+        "turns": 596,
+        "turns_fts": 596,
+        "turns_fts_data": 76,
+        "turns_fts_idx": 74,
+        "turns_fts_content": 596,
+        "turns_fts_docsize": 596,
+        "turns_fts_config": 1,
+        "sightings": 6,
+        "embeddings": 895,
+        "models": 3,
+        "judgements": 748,
+        "memory_fts": 896,
+        "memory_fts_data": 315,
+        "memory_fts_idx": 313,
+        "memory_fts_content": 896,
+        "memory_fts_docsize": 896,
+        "memory_fts_config": 1
+      }
+    },
+    "markdown_files": 914
+  },
+  "smoke_report": {
+    "version": "1.3.0",
+    "features": [
+      "mcp-stdio-http",
+      "vector-retrieval",
+      "classification",
+      "markdown",
+      "2d-3d-brain",
+      "durable-accumulation",
+      "model-workflows"
+    ],
+    "windows_integrity": {
+      "checked_paths": 314,
+      "mandatory_integrity": "Medium",
+      "data_folders_excluded": true
+    },
+    "external_runtimes_removed_from_path": true,
+    "http_routes": 10,
+    "mcp": {
+      "tools": 22,
+      "heartbeat": true,
+      "judge_classification_persisted": true,
+      "native_vector_retrieval": true,
+      "markdown_mcp_version_date": true,
+      "review_not_exposed_by_default": true,
+      "model_fixture_only": true,
+      "durable_absorption_verified_and_indexed": true,
+      "resources": true
+    },
+    "authenticated_http_mcp": true,
+    "schema": 2,
+    "desktop_default_exit_code": 0,
+    "desktop_ready": true,
+    "portable_launcher_without_language_runtimes": true,
+    "binary_scan": {
+      "checked_code_objects": 25988,
+      "private_code_filenames": 0,
+      "app_modules": [
+        "memora",
+        "memora.__main__",
+        "memora.accumulation",
+        "memora.bridge",
+        "memora.chat_models",
+        "memora.config",
+        "memora.control",
+        "memora.core",
+        "memora.docindex",
+        "memora.docmigrate",
+        "memora.documents",
+        "memora.errors",
+        "memora.gateway",
+        "memora.ingest",
+        "memora.jobs",
+        "memora.judge",
+        "memora.mcp",
+        "memora.mirror",
+        "memora.model_registry",
+        "memora.projections",
+        "memora.providers",
+        "memora.schema",
+        "memora.service",
+        "memora.sessions",
+        "memora.stdio",
+        "memora.store",
+        "memora.text",
+        "memora.vectors",
+        "memora.web",
+        "memora.workbench",
+        "memora.workflows",
+        "memora_native"
+      ],
+      "excluded_execution_components_absent": true
+    },
+    "backend_sha256": "3766e1325b9d9520e91f5643cd7a9fab0fcd788303a3aa11e71a1031f7f5df13",
+    "artifact_tree_sha256": "847320c426699392ef6e235a54bd78fd6ee7acbbd5cb8a42ea5edc39111c54ce",
+    "passed": true
+  },
+  "build_delivery": {
+    "version": "1.2.0",
+    "file": "memora-1.2.0-windows-x64.zip",
+    "sha256": "963ae6fab6a56da6ec86bbd1e895bbe531686cf425a9ae31e05f1e0a2a6707ba",
+    "bytes": 176800751,
+    "profile": "standalone-portable",
+    "unpack_and_run": true,
+    "bundled_data": [
+      "data/memory.sqlite3 (empty, schema v2)",
+      "data/markdown/",
+      "data/memora.json (empty template)"
+    ],
+    "desensitized": {
+      "files": 262,
+      "key_patterns": 0,
+      "credentials": 0
+    },
+    "packaged": "2026-10-17T15:39:01.508311+00:00"
+  }
+}

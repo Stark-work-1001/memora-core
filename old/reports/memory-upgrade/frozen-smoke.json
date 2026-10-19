@@ -1,0 +1,8 @@
+{
+  "mcp_tools": 26,
+  "templates": 8,
+  "knowledge_context": "ok",
+  "same_volume_sqlite_temp": true,
+  "data": "temporary-only",
+  "standalone_updated": false
+}

@@ -1,0 +1,92 @@
+{
+  "generated_at": "2026-10-18T17:32:21",
+  "root": "<project root>",
+  "product": "<standalone dir>",
+  "convention_ports": {
+    "dev": 8765,
+    "dev_mcp": 18184,
+    "standalone": 18765
+  },
+  "checks": [
+    {
+      "check": "devel reports edition=devel",
+      "ok": true,
+      "detail": "GET http://127.0.0.1:53864/api/agent/status -> edition='devel'"
+    },
+    {
+      "check": "the code path a frozen build takes reports standalone (SIMULATED sys.frozen, not the shipped exe)",
+      "ok": true,
+      "detail": "child process with sys.frozen=True reported edition='standalone' "
+    },
+    {
+      "check": "both editions run at the same time",
+      "ok": true,
+      "detail": "devel port 53864 and standalone port 53865 both accepting connections"
+    },
+    {
+      "check": "the two processes have different PIDs",
+      "ok": true,
+      "detail": "devel pid 604 vs standalone pid 2716"
+    },
+    {
+      "check": "the two ports differ",
+      "ok": true,
+      "detail": "devel 53864 vs standalone 53865"
+    },
+    {
+      "check": "each edition reports its own data directory",
+      "ok": true,
+      "detail": "devel '<user home>\\\\AppData\\\\Local\\\\Temp\\\\p5-devel-oaqk44n6' vs standalone '<user home>\\\\AppData\\\\Local\\\\Temp\\\\p5-standalone-sexaioww'"
+    },
+    {
+      "check": "both editions agree on the version",
+      "ok": true,
+      "detail": "devel '1.3.0' vs standalone '1.3.0'"
+    },
+    {
+      "check": "the CLI serve default port is tools/paths.py DEV_PORT",
+      "ok": true,
+      "detail": "memora --data X serve (no --port) would bind 8765, paths.DEV_PORT=8765"
+    },
+    {
+      "check": "the desktop shell default port is tools/paths.py PRODUCT_PORT",
+      "ok": true,
+      "detail": "desktop/main.cjs: const fixedPort=Number(process.env.MEMORA_PORT||18765);"
+    },
+    {
+      "check": "the development MCP HTTP port matches tools/paths.py DEV_MCP_PORT",
+      "ok": true,
+      "detail": "tools/runtime_manager.py: child = spawn([str(VENV_PYTHON), '-m', 'memora', '--data', str(DATA), 'serve', '--port', str(args.port), '--mcp-port', '"
+    },
+    {
+      "check": "convention ports are distinct",
+      "ok": true,
+      "detail": "dev=8765 dev_mcp=18184 standalone=18765"
+    },
+    {
+      "check": "neither edition took a convention port during this run",
+      "ok": true,
+      "detail": "devel=53864 and standalone=53865 are OS-assigned; the fixed ports stay reserved for the sessions that actually own them"
+    },
+    {
+      "check": "the shipped BUILD_MANIFEST.json agrees with the running backend",
+      "ok": true,
+      "detail": "BUILD_MANIFEST.json version='1.3.0' vs the frozen backend reports '1.3.0'"
+    }
+  ],
+  "failures": [
+    {
+      "check": "standalone reports edition=standalone",
+      "ok": false,
+      "detail": "GET http://127.0.0.1:53865/api/agent/status -> edition=None (the frozen backend at <standalone dir>\\resources\\backend\\memora-backend.exe predates the field: rebuild with tools/build_desktop.py)"
+    },
+    {
+      "check": "each edition labels itself for the banner",
+      "ok": false,
+      "detail": "devel '开发测试版 devel' vs standalone None"
+    }
+  ],
+  "warnings": [
+    "the convention standalone port 18765 is already bound by pid 38064; this run used the OS-assigned ports above instead and did not touch that process"
+  ]
+}

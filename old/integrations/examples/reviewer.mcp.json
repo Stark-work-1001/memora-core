@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memora-review": {
+      "command": "memora-mcp",
+      "env": { "MEMORA_DATA": "/absolute/path/to/your/memory-data", "MEMORA_ENABLE_REVIEW": "1" }
+    }
+  }
+}

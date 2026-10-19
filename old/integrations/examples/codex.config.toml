@@ -1,0 +1,4 @@
+# Append to ~/.codex/config.toml
+[mcp_servers.memora]
+command = "memora-mcp"
+env = { MEMORA_DATA = "/absolute/path/to/your/memory-data" }

@@ -1,0 +1,51 @@
+{
+  "name": "memora-core-desktop",
+  "productName": "MemoraCore",
+  "version": "1.0.0",
+  "description": "记忆中枢 · 桌面外壳（Electron）",
+  "main": "main.cjs",
+  "private": true,
+  "license": "MIT",
+  "author": {
+    "name": "memora-core"
+  },
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "app.memora.core",
+    "productName": "MemoraCore",
+    "asar": true,
+    "npmRebuild": false,
+    "compression": "store",
+    "directories": {
+      "output": "../dist/.eb",
+      "buildResources": "build"
+    },
+    "files": [
+      "package.json",
+      "main.cjs",
+      "preload.cjs",
+      "splash.html",
+      "error.html",
+      "icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/memora-backend.exe",
+        "to": "backend/memora-backend.exe"
+      }
+    ],
+    "win": {
+      "icon": "icon.png",
+      "target": [
+        "dir"
+      ]
+    }
+  }
+}

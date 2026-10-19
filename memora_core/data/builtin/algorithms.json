@@ -1,0 +1,342 @@
+[
+  {
+    "id": "bm25",
+    "name": "BM25 相关性打分",
+    "category": "retrieval",
+    "summary": "经典概率检索模型，按词频饱和与文档长度归一给分；FTS5 内置 bm25() 可直接用。",
+    "formula": "score(q,d)=Σ IDF(t)·(f(t,d)·(k1+1))/(f(t,d)+k1·(1-b+b·|d|/avgdl))",
+    "reference": "Robertson & Zaragoza 2009",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "bm25plus",
+    "name": "BM25+",
+    "category": "retrieval",
+    "summary": "对长文档中低词频命中的下界补偿，改善短查询召回。",
+    "formula": "score = BM25 + δ·|q∩d|",
+    "reference": "Lv & Zhai 2011",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "fts5-trigram",
+    "name": "SQLite FTS5 三元组索引",
+    "category": "retrieval",
+    "summary": "支持中文/无空格语言子串匹配，牺牲体积换召回。",
+    "formula": "tokenize='trigram'",
+    "reference": "SQLite 文档",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "char-ngram-hash",
+    "name": "字符 n-gram 哈希向量",
+    "category": "embedding",
+    "summary": "无云端 embedding 时的确定性替代：把字符 3-gram 哈希到 256 维并 L2 归一。",
+    "formula": "v[i]=Σ_{g∈grams} h(g)%D==i ? 1 : 0; v←v/||v||",
+    "reference": "本项目设定（离线兜底）",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "tfidf-cosine",
+    "name": "TF-IDF 余弦相似度",
+    "category": "retrieval",
+    "summary": "语料内统计的词权相似度，作为向量通道的离线版本。",
+    "formula": "cos(a,b)=a·b/(||a||·||b||)",
+    "reference": "Salton 1975",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "rrf",
+    "name": "倒数排名融合 RRF",
+    "category": "fusion",
+    "summary": "多路召回结果按名次融合，无需分数可比；k 越大越平滑。",
+    "formula": "score(d)=Σ_i w_i/(k+rank_i(d)), k=60",
+    "reference": "Cormack et al. 2009",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "weighted-fusion",
+    "name": "加权分数融合",
+    "category": "fusion",
+    "summary": "各通道归一化后线性加权，需分数可比。",
+    "formula": "s=Σ w_i·norm(s_i)",
+    "reference": "工业界常用",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "mmr",
+    "name": "最大边际相关 MMR",
+    "category": "fusion",
+    "summary": "在相关性与冗余之间折中，用于上下文去重。",
+    "formula": "MMR=argmax_{d∈R\\S}[λ·sim(d,q)−(1−λ)·max_{s∈S}sim(d,s)], λ=0.7",
+    "reference": "Carbonell & Goldstein 1998",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "cosine",
+    "name": "余弦相似度",
+    "category": "embedding",
+    "summary": "向量方向相似度，忽略模长。",
+    "formula": "cos(a,b)=a·b/(||a||₂·||b||₂)",
+    "reference": "—",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "simhash",
+    "name": "SimHash 近似去重",
+    "category": "dedup",
+    "summary": "64 位指纹，汉明距离 ≤3 视为近重复，O(1) 比较。",
+    "formula": "h=Σ sign(w_i)·v_i 逐位取符号",
+    "reference": "Charikar 2002",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "jaccard-shingle",
+    "name": "Jaccard 词袋相似",
+    "category": "dedup",
+    "summary": "5-gram shingle 集合交并比，抗改写。",
+    "formula": "J=|A∩B|/|A∪B|",
+    "reference": "—",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "levenshtein-norm",
+    "name": "归一化编辑距离",
+    "category": "dedup",
+    "summary": "字符级差异度量，适合短事实句判重。",
+    "formula": "sim=1−dist(a,b)/max(|a|,|b|)",
+    "reference": "Levenshtein 1966",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "exponential-decay",
+    "name": "指数遗忘衰减",
+    "category": "decay",
+    "summary": "越久未用的记忆权重按半衰期指数下降，用于排序与归档。",
+    "formula": "w(t)=w0·exp(−λ·Δt), λ=ln2/half_life",
+    "reference": "Ebbinghaus 1885 / Generative Agents 2023",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "ga-recency-importance",
+    "name": "记忆流三元打分",
+    "category": "ranking",
+    "summary": "Generative Agents 的检索函数：近因、重要度、相关性的加权和。",
+    "formula": "score=α·recency+β·importance+γ·relevance，α=β=γ=1（等权）",
+    "reference": "Park et al. 2023",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "importance-heuristic",
+    "name": "重要度启发式",
+    "category": "ranking",
+    "summary": "无 LLM 时用长度、实体密度、显式意图词（记住/别忘/总是）估算重要度。",
+    "formula": "imp=clip(0.3+0.2·has_intent+0.1·entities+0.1·log(len))",
+    "reference": "本项目设定",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "pagerank",
+    "name": "PageRank 中心度",
+    "category": "graph",
+    "summary": "在实体图上传播重要性，识别枢纽概念。",
+    "formula": "PR(u)=(1−d)/N+d·Σ PR(v)/L(v)",
+    "reference": "Page & Brin 1998",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "ppr",
+    "name": "个性化 PageRank 检索",
+    "category": "retrieval",
+    "summary": "HippoRAG 式图检索：从查询实体出发的带重启随机游走。",
+    "formula": "π=(1−α)·r+α·Pᵀπ, α=0.85",
+    "reference": "HippoRAG 2024",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "louvain",
+    "name": "Louvain 社区发现",
+    "category": "graph",
+    "summary": "把图切成主题社区，支撑脑图的分层折叠与聚合。",
+    "formula": "最大化模块度 Q",
+    "reference": "Blondel et al. 2008",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "force-atlas2",
+    "name": "ForceAtlas2 布局",
+    "category": "layout",
+    "summary": "带吸引力/排斥力与重力项的力导向布局，适合大图。",
+    "formula": "F_a=k_a·d, F_r=k_r·deg·1/d",
+    "reference": "Jacomy et al. 2014",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "fruchterman-reingold",
+    "name": "FR 力导向布局",
+    "category": "layout",
+    "summary": "经典斥力-引力迭代，小图质量高。",
+    "formula": "F_r=k²/d, F_a=d²/k",
+    "reference": "Fruchterman & Reingold 1991",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "barnes-hut",
+    "name": "Barnes-Hut 近似",
+    "category": "layout",
+    "summary": "用四叉树把 O(n²) 斥力降到 O(n log n)，是万节点布局的前提。",
+    "formula": "θ 判据开角",
+    "reference": "Barnes & Hut 1986",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "tidy-tree",
+    "name": "Reingold-Tilford 层次树",
+    "category": "layout",
+    "summary": "层级脑图的紧凑树布局，父居中、子树不重叠。",
+    "formula": "后序累计偏移",
+    "reference": "Reingold & Tilford 1981",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "radial-tree",
+    "name": "径向树布局",
+    "category": "layout",
+    "summary": "层级 × 时间混合视图，半径编码深度。",
+    "formula": "r=f(depth), θ=f(index)",
+    "reference": "—",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "umap",
+    "name": "UMAP 降维预布局",
+    "category": "layout",
+    "summary": "把高维向量投影到 2D 供语义脑图使用，保留全局结构。",
+    "formula": "基于模糊拓扑与交叉熵优化",
+    "reference": "McInnes et al. 2018",
+    "offline": 1,
+    "runnable": 0
+  },
+  {
+    "id": "hnsw",
+    "name": "HNSW 近似最近邻",
+    "category": "retrieval",
+    "summary": "分层可导航小世界图索引，向量检索的工业标准。",
+    "formula": "贪心逐层下降 + ef 搜索",
+    "reference": "Malkov & Yashunin 2016",
+    "offline": 1,
+    "runnable": 0
+  },
+  {
+    "id": "ivf-pq",
+    "name": "IVF-PQ 倒排乘积量化",
+    "category": "retrieval",
+    "summary": "大规模向量的压缩索引，内存换速度。",
+    "formula": "k-means 聚类 + 子空间量化",
+    "reference": "Jégou et al. 2011",
+    "offline": 1,
+    "runnable": 0
+  },
+  {
+    "id": "raptor",
+    "name": "RAPTOR 递归摘要树",
+    "category": "transform",
+    "summary": "自底向上聚类摘要，形成可多层检索的抽象树。",
+    "formula": "聚类 + LLM 摘要迭代",
+    "reference": "Sarthi et al. 2024",
+    "offline": 1,
+    "runnable": 0
+  },
+  {
+    "id": "sm2",
+    "name": "SM-2 间隔复习",
+    "category": "review",
+    "summary": "按回忆质量 0–5 调整间隔与难度因子，生成复习排程。",
+    "formula": "EF'=EF+(0.1−(5−q)·(0.08+(5−q)·0.02)), I1=1, I2=6, In=I_{n−1}·EF",
+    "reference": "Wozniak 1987",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "fsrs",
+    "name": "FSRS 记忆稳定性模型",
+    "category": "review",
+    "summary": "以稳定性 DSR 三变量刻画遗忘曲线，间隔更精确。",
+    "formula": "R=(1+t/(9S))^(−1)",
+    "reference": "Free Spaced Repetition Scheduler",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "semantic-chunking",
+    "name": "语义边界切块",
+    "category": "transform",
+    "summary": "按标题与语义相似度断点切块，避免把语义切碎。",
+    "formula": "相邻句相似度谷值处断开",
+    "reference": "—",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "greedy-budget-pack",
+    "name": "预算贪心打包",
+    "category": "transform",
+    "summary": "在 token 预算下按边际收益选择条目，最大化信息密度。",
+    "formula": "按 score/len 排序贪心装入，直到预算耗尽",
+    "reference": "本项目设定",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "conflict-score",
+    "name": "冲突强度打分",
+    "category": "judge",
+    "summary": "结合实体重叠、数值矛盾、极性反转给出冲突分。",
+    "formula": "c=0.4·entity_overlap+0.35·polarity_flip+0.25·numeric_conflict",
+    "reference": "本项目设定",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "temporal-validity",
+    "name": "双时间有效性",
+    "category": "judge",
+    "summary": "区分“何时为真”与“何时被记录”，用于迟到事实与历史查询。",
+    "formula": "(valid_from,valid_to) × (recorded_at)",
+    "reference": "Graphiti / bitemporal 建模",
+    "offline": 1,
+    "runnable": 1
+  },
+  {
+    "id": "contextual-prefix",
+    "name": "上下文前缀嵌入",
+    "category": "embedding",
+    "summary": "Anthropic Contextual Retrieval：为块补一句上下文再嵌入，显著降低错配。",
+    "formula": "embed(context || chunk)",
+    "reference": "Anthropic 2024",
+    "offline": 1,
+    "runnable": 0
+  }
+]

@@ -1,0 +1,154 @@
+[
+  {
+    "id": "dsh-desktop",
+    "name": "DeepSeek Harness (DSH)",
+    "ecosystem": "dsh",
+    "kind": "chat",
+    "protocols": [
+      "mcp-stdio",
+      "mcp-http",
+      "plugin"
+    ],
+    "probes": [
+      {
+        "type": "process",
+        "match": [
+          "DeepSeek Harness",
+          "dsh.exe",
+          "electron"
+        ]
+      },
+      {
+        "type": "port",
+        "match": [
+          52527
+        ]
+      },
+      {
+        "type": "file",
+        "match": [
+          "~/.dsh/heartbeat.json"
+        ]
+      }
+    ],
+    "config_hint": "在 DSH 插件目录安装 memora-core 连接器，或用 MCP 服务器配置指向 memora-core。"
+  },
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "ecosystem": "claude-code",
+    "kind": "coding",
+    "protocols": [
+      "mcp-stdio",
+      "hooks"
+    ],
+    "probes": [
+      {
+        "type": "process",
+        "match": [
+          "claude",
+          "claude-code"
+        ]
+      },
+      {
+        "type": "file",
+        "match": [
+          "~/.claude.json",
+          "~/.claude/settings.json"
+        ]
+      }
+    ],
+    "config_hint": "在 ~/.claude.json 的 mcpServers 增加 memora-core，并可挂 SessionStart/Stop hooks 调 REST。"
+  },
+  {
+    "id": "codex-cli",
+    "name": "OpenAI Codex CLI",
+    "ecosystem": "codex",
+    "kind": "coding",
+    "protocols": [
+      "mcp-stdio"
+    ],
+    "probes": [
+      {
+        "type": "process",
+        "match": [
+          "codex"
+        ]
+      },
+      {
+        "type": "file",
+        "match": [
+          "~/.codex/config.toml"
+        ]
+      }
+    ],
+    "config_hint": "在 ~/.codex/config.toml 的 [mcp_servers.memora] 增加 command/args 指向 memora-core。"
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "ecosystem": "cursor",
+    "kind": "coding",
+    "protocols": [
+      "mcp-stdio"
+    ],
+    "probes": [
+      {
+        "type": "process",
+        "match": [
+          "Cursor.exe"
+        ]
+      },
+      {
+        "type": "file",
+        "match": [
+          "~/.cursor/mcp.json"
+        ]
+      }
+    ],
+    "config_hint": "在 ~/.cursor/mcp.json 增加 memora-core 服务。"
+  },
+  {
+    "id": "claude-desktop",
+    "name": "Claude Desktop",
+    "ecosystem": "claude",
+    "kind": "chat",
+    "protocols": [
+      "mcp-stdio"
+    ],
+    "probes": [
+      {
+        "type": "process",
+        "match": [
+          "Claude.exe"
+        ]
+      },
+      {
+        "type": "file",
+        "match": [
+          "~/AppData/Roaming/Claude/claude_desktop_config.json"
+        ]
+      }
+    ],
+    "config_hint": "claude_desktop_config.json 的 mcpServers 增加 memora-core。"
+  },
+  {
+    "id": "generic-mcp",
+    "name": "通用 MCP 客户端",
+    "ecosystem": "generic-mcp",
+    "kind": "mcp-client",
+    "protocols": [
+      "mcp-stdio",
+      "mcp-http"
+    ],
+    "probes": [
+      {
+        "type": "mcp",
+        "match": [
+          "initialize"
+        ]
+      }
+    ],
+    "config_hint": "任何 MCP 客户端都可 stdio 启动 python -m memora_core --mcp，或 HTTP 连 /mcp。"
+  }
+]

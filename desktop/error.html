@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>启动失败 · 记忆中枢</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #111923;
+    --fg: #e6f2f8;
+    --muted: #7d90a0;
+    --danger: #ff6b6b;
+    --cyan: #38e1ff;
+    --edge: rgba(120, 180, 220, .16);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background:
+      radial-gradient(90% 70% at 50% -10%, rgba(255, 107, 107, .10), transparent 60%),
+      radial-gradient(80% 60% at 50% 110%, rgba(56, 225, 255, .07), transparent 60%),
+      var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px;
+  }
+  .card {
+    width: min(880px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 14px;
+    padding: 30px 34px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .16em; color: var(--danger);
+    border: 1px solid rgba(255, 107, 107, .35);
+    background: rgba(255, 107, 107, .08);
+    padding: 5px 10px; border-radius: 999px; text-transform: uppercase;
+  }
+  h1 { font-size: 21px; margin: 18px 0 8px; font-weight: 600; }
+  .lead { color: #b8cbd8; font-size: 13.5px; line-height: 1.7; margin: 0 0 18px; }
+  .message {
+    font-family: "Consolas", "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.65;
+    color: #ffd0d0; background: rgba(255, 107, 107, .07);
+    border: 1px solid rgba(255, 107, 107, .22); border-radius: 9px;
+    padding: 13px 15px; white-space: pre-wrap; word-break: break-all; margin-bottom: 20px;
+  }
+  dl { display: grid; grid-template-columns: 96px 1fr; gap: 8px 14px; margin: 0 0 22px; font-size: 12.5px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-family: "Consolas", "Cascadia Mono", monospace; word-break: break-all; color: #cfe0ea; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer;
+    padding: 9px 18px; border-radius: 8px;
+    border: 1px solid var(--edge); background: #16202b; color: var(--fg);
+    transition: background .15s ease, border-color .15s ease;
+  }
+  button:hover { background: #1c2836; border-color: rgba(120, 180, 220, .32); }
+  button.primary {
+    border-color: transparent;
+    background: linear-gradient(135deg, var(--cyan), #7c5cff);
+    color: #05121a; font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  .hint { margin-top: 18px; font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+  .toast { margin-top: 14px; font-size: 12px; color: var(--cyan); min-height: 16px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge">启动失败</span>
+    <h1>后端没有成功启动</h1>
+    <p class="lead">
+      记忆中枢需要本地后端进程提供 API 与界面。它连续两次未能就绪，请查看日志定位原因，
+      或点击“重试启动”再试一次。
+    </p>
+    <div class="message" id="message">未知错误</div>
+    <dl>
+      <dt>日志文件</dt><dd id="logPath">—</dd>
+      <dt>数据目录</dt><dd id="dataPath">—</dd>
+      <dt>运行模式</dt><dd id="mode">—</dd>
+    </dl>
+    <div class="actions">
+      <button class="primary" id="retry">重试启动</button>
+      <button id="openLogs">打开日志</button>
+      <button id="openData">打开数据目录</button>
+      <button id="copyInfo">复制诊断信息</button>
+    </div>
+    <div class="toast" id="toast"></div>
+    <p class="hint">
+      常见原因：端口被占用、杀毒软件拦截了后端可执行文件、数据目录不可写。<br>
+      命令行排查：在安装目录执行 <code>resources\backend\memora-backend.exe doctor</code> 查看后端自检输出。
+    </p>
+  </div>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var message = q.get('message') || '未知错误';
+    var logPath = q.get('logPath') || '';
+    var dataPath = q.get('dataPath') || '';
+    var dev = q.get('dev') === '1';
+
+    document.getElementById('message').textContent = message;
+    document.getElementById('logPath').textContent = logPath || '—';
+    document.getElementById('dataPath').textContent = dataPath || '—';
+    document.getElementById('mode').textContent = dev ? '开发模式（python -m memora_core）' : '打包模式（memora-backend.exe）';
+
+    function toast(text) {
+      var el = document.getElementById('toast');
+      el.textContent = text;
+      setTimeout(function () { if (el.textContent === text) el.textContent = ''; }, 2600);
+    }
+    function call(name) {
+      if (window.memora && typeof window.memora[name] === 'function') return window.memora[name]();
+      return Promise.reject(new Error('桥接不可用'));
+    }
+
+    document.getElementById('retry').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = '正在重试…';
+      toast('已请求重启后端，请稍候…');
+      call('retryBackend').catch(function (err) { toast('重试失败：' + (err && err.message ? err.message : err)); })
+        .finally(function () { btn.disabled = false; btn.textContent = '重试启动'; });
+    });
+    document.getElementById('openLogs').addEventListener('click', function () {
+      call('openLogs').catch(function (err) { toast('打开失败：' + err.message); });
+    });
+    document.getElementById('openData').addEventListener('click', function () {
+      call('openDataDir').catch(function (err) { toast('打开失败：' + err.message); });
+    });
+    document.getElementById('copyInfo').addEventListener('click', function () {
+      var text = ['错误：' + message, '日志：' + logPath, '数据：' + dataPath, '模式：' + (dev ? 'dev' : 'packaged')].join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { toast('诊断信息已复制'); },
+          function () { toast('复制失败，请手动选择文本'); });
+      } else {
+        toast('复制失败，请手动选择文本');
+      }
+    });
+  })();
+</script>
+</body>
+</html>

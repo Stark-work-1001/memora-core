@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>脑图 · 独立演示</title>
+<!--
+  独立演示页：把构建产物 brain.js 直接跑起来，不依赖任何后端。
+
+  怎么用（推荐第 1 种）：
+    1) cd frontend && npm run build
+    2) cp frontend/tests/brain-demo.html memora_core/static/
+    3) cd memora_core/static && python -m http.server 8899
+    4) 浏览器打开 http://127.0.0.1:8899/brain-demo.html
+
+  为什么 file:// 双击打不开：
+    brain.html 带的 CSP 是 script-src 'self'，file:// 下 'self' 的语义各浏览器不一致，
+    Chrome 会直接拒绝执行脚本，页面一片空白。这不是脑图的 bug，而是浏览器对本地
+    文件的同源限制；起一个静态服务器即可。
+
+  这个文件不参与构建，只是「手动打开看看」的入口。
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #070b12; }
+  #mem-brain { height: 100%; }
+</style>
+</head>
+<body>
+<!-- 脑图只需要这一个挂载点；其余 UI 全部由 brain.js 自己构建 -->
+<div id="mem-brain"></div>
+<script src="./brain.js"></script>
+</body>
+</html>

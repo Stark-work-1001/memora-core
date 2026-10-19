@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="670" viewBox="0 0 1140 670" role="img" aria-labelledby="title desc">
+<title id="title">memora 1.0.2 · 精简记忆架构</title><desc id="desc">外部智能体通过 MCP 接入；记忆经过分类和人工确认后进入 SQLite、Markdown 和向量索引。文档和脑图保留，按需加载。旧扩展源码保留而不进入默认构建。</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#6c826b"/></marker><style>text{font-family:'Microsoft YaHei','Segoe UI',sans-serif;fill:#2a4739}.small{font-size:13px;fill:#71826b}.title{font-size:17px;font-weight:600}.box{fill:#fff;stroke:#d1ddca;rx:12}.line{fill:none;stroke:#6c826b;stroke-width:1.6;marker-end:url(#arrow)}</style></defs>
+<rect width="1140" height="670" fill="#f5f6f1" rx="16"/><text x="40" y="48" font-size="28" font-weight="600">memora</text><text x="206" y="47" class="small">1.0.2 / 一份代码 · 一个应用 · 一个构建</text>
+<rect class="box" x="40" y="86" width="236" height="120"/><text class="title" x="62" y="119">外部智能体 / MCP</text><text class="small" x="62" y="148">推理、回答和调度由接入方负责</text><text class="small" x="62" y="176">来源 · event_id · 心跳 · 工具调用</text>
+<rect class="box" x="40" y="250" width="236" height="120"/><text class="title" x="62" y="283">用户工作台</text><text class="small" x="62" y="312">检索 · 分类沉淀 · 智能体连接</text><text class="small" x="62" y="340">Markdown 管理 · 2D / 3D 脑图</text>
+<rect x="330" y="86" width="444" height="284" rx="12" fill="#e8eee1" stroke="#bdcdb1"/><text class="title" x="352" y="119">memora / 统一记忆生命周期</text>
+<rect class="box" x="352" y="140" width="400" height="46"/><text x="369" y="169" font-size="14">接收与去重 → Judge / 规则分类 → 保存去向</text>
+<path class="line" d="M552,186 V210"/><rect class="box" x="352" y="214" width="400" height="46"/><text x="369" y="243" font-size="14">待审队列 → 用户确认 → 长期记忆与索引</text>
+<rect class="box" x="352" y="284" width="190" height="60"/><text x="366" y="308" font-size="14">Embedding / 向量模型</text><text class="small" x="366" y="329">本地或云端 · 文本编码</text>
+<rect class="box" x="556" y="284" width="196" height="60"/><text x="570" y="308" font-size="14">Judge / 判定模型</text><text class="small" x="570" y="329">类别 · 持久性 · 风险</text>
+<path class="line" d="M276,147 H330"/><path class="line" d="M276,310 H330"/>
+<rect class="box" x="828" y="86" width="272" height="120"/><text class="title" x="850" y="119">SQLite / FTS5 + Rust</text><text class="small" x="850" y="148">事务真源 · 来源 · 审计 · 词法索引</text><text class="small" x="850" y="176">兼容 schema v2 · 向量 top-k / RRF</text><path class="line" d="M774,146 H828"/>
+<rect class="box" x="828" y="250" width="272" height="120"/><text class="title" x="850" y="283">Markdown 文档管理</text><text class="small" x="850" y="312">多用途 · 不可变版本 · 原始日期</text><text class="small" x="850" y="340">文档库 / 记忆镜像 → 可重建文件</text><path class="line" d="M774,310 H828"/>
+<rect class="box" x="40" y="420" width="1060" height="108"/><text class="title" x="62" y="453">按需加载的观察与文档层</text><text class="small" x="62" y="483">three.js / TypeScript / Rust WASM · 语义关系与层级 · 搜索 · 布局 · 自动聚焦 · 雾化 · 流动</text><text class="small" x="62" y="506">脑图读取已有记忆、关系和文档；几何布局不写回为语义事实。文档发布不自动批准记忆。</text><path class="line" d="M552,370 V420"/>
+<rect x="40" y="568" width="1060" height="66" rx="10" fill="#edf0e8" stroke="#d8e0d1" stroke-dasharray="5 5"/><text x="62" y="596" font-size="14">扩展源码保留：聊天 / 工作流 / 档案扫描 / HTTP 桥接 / 组织协调；默认构建不加载这些执行组件。</text><text class="small" x="62" y="618">Python 负责接口与模型 I/O；Rust 负责检索热循环；Electron 沿用现有桌面壳；C++ 推理服务可选。</text>
+</svg>

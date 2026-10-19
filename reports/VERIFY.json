@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "passed": 10,
+  "failed": 0,
+  "results": [
+    {
+      "name": "source.layout",
+      "ok": true,
+      "skipped": false,
+      "detail": "missing=none",
+      "evidence": "[{\"path\": \"memora_core/__init__.py\", \"exists\": true, \"bytes\": 459, \"sha256\": \"c4aae5f1a12e2af4\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/__main__.py\", \"exists\": true, \"bytes\": 7292, \"sha256\": \"3e228deb4de9c7b7\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/db.py\", \"exists\": true, \"bytes\": 3994, \"sha256\": \"529358f801512374\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/paths.py\", \"exists\": true, \"bytes\": 2319, \"sha256\": \"43145cc83da0383d\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/store.py\", \"exists\": true, \"bytes\": 71205, \"sha256\": \"ceb0ec91a5916eaf\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/vault.py\", \"exists\": true, \"bytes\": 31235, \"sha256\": \"115e2c7e809bab5d\", \"mtime\": \"2026-10-19T22:48:02\"}]"
+    },
+    {
+      "name": "python.compile",
+      "ok": true,
+      "skipped": false,
+      "detail": "compileall rc=0",
+      "evidence": ""
+    },
+    {
+      "name": "backend.stdlib-only",
+      "ok": true,
+      "skipped": false,
+      "detail": "violations=0",
+      "evidence": ""
+    },
+    {
+      "name": "frontend.assets",
+      "ok": true,
+      "skipped": false,
+      "detail": "[[\"/index.html\", 594], [\"/app.js\", 387011], [\"/app.css\", 39252], [\"/brain.js\", 571799]]",
+      "evidence": "[{\"path\": \"memora_core/static/index.html\", \"exists\": true, \"bytes\": 594, \"sha256\": \"df2926f0456d4483\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/static/app.js\", \"exists\": true, \"bytes\": 387011, \"sha256\": \"d17b3aa03f95a6ce\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/static/app.css\", \"exists\": true, \"bytes\": 39252, \"sha256\": \"3be602dece459181\", \"mtime\": \"2026-10-19T22:48:02\"}, {\"path\": \"memora_core/static/brain.js\", \"exists\": true, \"bytes\": 571799, \"sha256\": \"0b3770ff42072164\", \"mtime\": \"2026-10-19T22:48:02\"}]"
+    },
+    {
+      "name": "unit.tests",
+      "ok": true,
+      "skipped": false,
+      "detail": "unittest rc=0",
+      "evidence": "test_missing_input_raises_workflow_input_error (tests.test_workflows.TestFailure.test_missing_input_raises_workflow_input_error) ... ok\ntest_skip_mode_keeps_other_branches (tests.test_workflows.TestFailure.test_skip_mode_keeps_other_branches)\nmode=skip��ʧ�ܽڵ�����α��������ֵܷ�֧�����ܣ�run=partial�� ... ok\ntest_unknown_template_raises (tests.test_workflows.TestFailure.test_unknown_template_raises) ... ok\ntest_declared_dependency_fallback_runs (tests.test_workflows.TestFallback.test_declared_dependency_fallback_runs)\n����ʵ handler ������rerank �� gw=None ���� score-passthrough�� ... ok\ntest_model_unavailable_uses_registered_fallback (tests.test_workflows.TestFallback.test_model_unavailable_uses_registered_fallback) ... ok\ntest_model_unavailable_without_fallback_marks_degraded (tests.test_workflows.TestFallback.test_model_unavailable_without_fallback_marks_degraded) ... ok\ntest_dedup_merge_offline (tests.test_workflows.TestOfflineRuns.test_dedup_merge_offline) ... ok\ntest_hybrid_recall_rerank_offline (tests.test_workflows.TestOfflineRuns.test_hybrid_recall_rerank_offline) ... ok\ntest_quick_capture_is_idempotent_by_event_id (tests.test_workflows.TestOfflineRuns.test_quick_capture_is_idempotent_by_event_id) ... ok\ntest_quick_capture_offline (tests.test_workflows.TestOfflineRuns.test_quick_capture_offline) ... ok\ntest_run_is_reproducible_in_structure (tests.test_workflows.TestOfflineRuns.test_run_is_reproducible_in_structure) ... ok\ntest_builtin_prompts_are_loaded (tests.test_workflows.TestPrompts.test_builtin_prompts_are_loaded) ... ok\ntest_parse_json_is_lenient (tests.test_workflows.TestPrompts.test_parse_json_is_lenient) ... ok\ntest_render_named_uses_builtin_template (tests.test_workflows.TestPrompts.test_render_named_uses_builtin_template) ... ok\ntest_render_replaces_variables (tests.test_workflows.TestPrompts.test_render_replaces_variables) ... ok\ntest_handlers_cover_all_kinds (tests.test_workflows.TestTemplates.test_handlers_cover_all_kinds) ... ok\ntest_list_and_get (t"
+    },
+    {
+      "name": "e2e.selftest",
+      "ok": true,
+      "skipped": false,
+      "detail": "passed=14 failed=0 skipped=0",
+      "evidence": "rror\",\n      \"status\": \"pass\",\n      \"ms\": 5,\n      \"detail\": \"memories/m-1dd084f8abfd-�Լ����-memora-core-ʹ��-SQLite-��Ϊ������Դ.md (613 bytes)\"\n    },\n    {\n      \"name\": \"retrieval.search\",\n      \"status\": \"pass\",\n      \"ms\": 25,\n      \"detail\": \"hits=1 degraded=['vector: embed: ModelUnavailable([embedding/-] δ����)', 'rerank: rerank: ModelUnavailable([reranker/-] δ����)'] took=2.021ms\"\n    },\n    {\n      \"name\": \"workflows.registry\",\n      \"status\": \"pass\",\n      \"ms\": 27,\n      \"detail\": \"templates=18 (seeded 18) handlers=49\"\n    },\n    {\n      \"name\": \"workflows.run\",\n      \"status\": \"pass\",\n      \"ms\": 10,\n      \"detail\": \"run=run-33d2509f6185 status=partial steps=8 degraded=3\"\n    },\n    {\n      \"name\": \"graph.views\",\n      \"status\": \"pass\",\n      \"ms\": 3,\n      \"detail\": \"{\\\"semantic\\\": [1, 0], \\\"hierarchy\\\": [2, 1], \\\"timeline\\\": [2, 1], \\\"evidence\\\": [1, 0]}\"\n    },\n    {\n      \"name\": \"agents.probe\",\n      \"status\": \"pass\",\n      \"ms\": 348,\n      \"detail\": \"seeded=6 probed=12 agents=6\"\n    },\n    {\n      \"name\": \"models.health\",\n      \"status\": \"pass\",\n      \"ms\": 1,\n      \"detail\": \"roles=chat,embedding,extractor,judge,reranker,vision degraded=6\"\n    },\n    {\n      \"name\": \"mcp.handshake\",\n      \"status\": \"pass\",\n      \"ms\": 1,\n      \"detail\": \"22 tools\"\n    },\n    {\n      \"name\": \"exchange.roundtrip\",\n      \"status\": \"pass\",\n      \"ms\": 1,\n      \"detail\": \"export_bytes=495 import={\\\"imported\\\": 0, \\\"skipped\\\": 1, \\\"deduped\\\": 1, \\\"errors\\\": [], \\\"total\\\": 1, \\\"dry_run\\\": false, \\\"ids\\\": [], \\\"dedup\\\": [{\\\"index\\\": 0, \\\"target\\\": \\\"m-1dd084f8abfd\\\", \\\"dup\\\": 1.0, \\\"title\\\": \\\"�Լ���䣺memora-core ʹ�� SQLite ��Ϊ������Դ\\\"}], \\\"formats\\\": {\\\"memora\\\": 1}}\"\n    },\n    {\n      \"name\": \"server.routes\",\n      \"status\": \"pass\",\n      \"ms\": 7,\n      \"detail\": \"45 routes\"\n    },\n    {\n      \"name\": \"frontend.assets\",\n      \"status\": \"pass\",\n      \"ms\": 0,\n      \"detail\": \"{\\\"index.html\\\": 594, \\\"app.js\\\": 387011, \\\"app.css\\\": 39252, \\\"brain.js\\\": 571799}\"\n    }\n  ]\n}\n"
+    },
+    {
+      "name": "server.api",
+      "ok": true,
+      "skipped": false,
+      "detail": "failed=none",
+      "evidence": "{\"health\": [200, {\"ok\": true, \"version\": \"1.0.0\", \"uptime_s\": 0}], \"create_memory\": [201, \"m-a212d6a6d11d\"], \"get_memory\": [200, true], \"search\": [200, 1], \"graph\": [200, [1, 0]], \"workflows\": [200, 18], \"algorithms\": [200, 34], \"agents\": [200, 6], \"models\": [200, true], \"overview\": [200, true], \"index_html\": [200, 400]}"
+    },
+    {
+      "name": "mcp.stdio",
+      "ok": true,
+      "skipped": false,
+      "detail": "server={'name': 'memora-core', 'version': '1.0.0'} tools=22",
+      "evidence": "{\"tools\": [\"memory_capture\", \"memory_remember\", \"memory_recall\", \"memory_search\", \"memory_digest\", \"memory_get\", \"memory_update\", \"memory_forget\", \"memory_relate\", \"memory_evidence\", \"memory_review\", \"memory_graph\", \"memory_session_begin\", \"memory_session_end\", \"memory_agent_status\", \"memory_scope_list\", \"memory_stats\", \"memory_workflow_run\", \"memory_workflow_list\", \"memory_export\", \"memory_import\", \"memory_health\"]}\n[memora-mcp] memora-core MCP stdio ready (agent=unknown, tools=22)\n"
+    },
+    {
+      "name": "desktop.artifacts",
+      "ok": true,
+      "skipped": true,
+      "detail": "not built in this tree; run tools/build_desktop.py or use the release zip",
+      "evidence": "{\"app\": [], \"backend\": {\"path\": \"dist/memora-backend.exe\", \"exists\": false}}"
+    },
+    {
+      "name": "data.present",
+      "ok": true,
+      "skipped": false,
+      "detail": "entries=7",
+      "evidence": "backups, exports, heartbeat, inbox, logs, tmp, vault"
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memora · 工作流可视化</title>
+<!-- Absolute paths on purpose. This page is still served at /dag, /dag/ and /dag/index.html so an
+     old bookmark resolves instead of 404ing. /dag/* resolves from every path the server exposes,
+     while relative URLs would resolve against the current directory.
+
+     The canvas is no longer a separate destination: it is embedded in the workbench view
+     「07 工作流可视化」 (see dag-embed.js), where the sidebar and project scope stay visible. This
+     standalone document is kept only as a compatibility entry point for old bookmarks, and it is
+     the only place that marks itself `dag-standalone` so dag.css's page-level rules apply there
+     and nowhere else (the same stylesheet is loaded inside the workbench). -->
+<!-- Mark the document BEFORE the stylesheet paints, so the full-page background never flashes and
+     the page rules in dag.css only ever match this document. -->
+<script>document.addEventListener('DOMContentLoaded', function () { document.body.classList.add('dag-standalone'); });</script>
+<link rel="stylesheet" href="/dag/styles.css">
+</head>
+<body>
+<main class="dag">
+  <header class="dag-bar">
+    <a class="dag-back" id="dag-back" href="/" title="返回工作台">
+      <span aria-hidden="true">←</span> 返回工作台
+    </a>
+    <h1>工作流可视化</h1>
+    <span class="dag-spacer"></span>
+    <button type="button" id="dag-add-node">添加节点</button>
+    <button type="button" id="dag-remove-node">删除节点</button>
+    <button type="button" id="dag-remove-edge">删除连线</button>
+    <button type="button" id="dag-organize">整理布局</button>
+    <span class="dag-group">
+      <button type="button" id="dag-zoom-out" aria-label="缩小">−</button>
+      <button type="button" id="dag-zoom-in" aria-label="放大">+</button>
+      <button type="button" id="dag-fit">适应窗口</button>
+    </span>
+    <button type="button" id="dag-save" class="dag-primary">保存</button>
+  </header>
+  <p class="dag-redirect">这个独立页面已并入工作台：<a id="dag-embedded-link" href="/">在工作台内打开「07 工作流可视化」</a>，侧栏与项目空间会保持可见。</p>
+  <div class="dag-body">
+    <nav class="dag-rail" aria-label="工作流列表">
+      <div class="dag-rail-head">
+        <strong>工作流</strong>
+        <button type="button" id="dag-new-workflow">新建</button>
+      </div>
+      <div id="dag-list-items" class="dag-list-items"></div>
+    </nav>
+    <section class="dag-stage">
+      <div id="dag-canvas" class="dag-canvas-host"></div>
+      <div id="dag-empty" class="dag-empty" hidden></div>
+      <p class="dag-hint">拖动卡片排版 · 从卡片右侧圆点拖到另一张卡片建立连线 · 滚轮缩放 · 空白处拖动平移 · Delete 删除所选</p>
+    </section>
+    <aside class="dag-inspector">
+      <div id="dag-inspector-body" class="dag-inspector-body"></div>
+      <div class="dag-run">
+        <h2>运行</h2>
+        <label for="dag-slug">运行于文档</label>
+        <input id="dag-slug" data-audience="human" placeholder="文档 slug" autocomplete="off">
+        <label for="dag-audience">读取用途</label>
+        <select id="dag-audience">
+          <option value="human">面向人（human）</option>
+          <option value="agent">面向智能体（agent）</option>
+        </select>
+        <div class="dag-run-actions">
+          <button type="button" id="dag-run">运行</button>
+          <button type="button" id="dag-cancel">取消</button>
+          <button type="button" id="dag-refresh-runs">刷新状态</button>
+        </div>
+        <div id="dag-run-body" class="dag-run-body"></div>
+      </div>
+    </aside>
+  </div>
+  <footer class="dag-foot">
+    <span id="dag-state" class="dag-state"></span>
+    <span id="dag-notice" class="dag-notice" hidden></span>
+  </footer>
+</main>
+<!-- Absolute for the same reason as the stylesheet above. -->
+<script src="/dag/app.js"></script>
+</body>
+</html>

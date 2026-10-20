@@ -16,7 +16,7 @@
   R1  无邻居                                      → add
   R2  归一化文本完全相同，或 dup ≥ 0.92 且不构成"更新" → noop（target=旧记忆）
   R3  dup ≥ 0.92 且构成更新（新证据更强/显式 supersedes）→ merge（保留双方内容）
-  R4  冲突分 ≥ 0.55：
+  R4  冲突分 ≥ 0.50（CONFLICT_ASK）：
         R4a 新证据更强（trust/confidence/来源数占优）→ supersede
         R4b 否则                                    → ask
   R5  0.80 ≤ dup < 0.92：
@@ -451,9 +451,18 @@ def _connect(store) -> sqlite3.Connection:
     return _c(store)
 
 
+DEDUP_PREFILTER = 200          # 池超过这么多条时，只对字面预筛出的候选做三通道全量打分
+
+
 def find_duplicates(store, candidate: dict, limit: int = 10) -> list[dict]:
-    """在库里找 candidate 的近似重复，按 dup 降序返回。"""
-    from .retrieval import _expand_scope, _fetch_pool
+    """在库里找 candidate 的近似重复，按 dup 降序返回。
+
+    候选池 = 作用域内全部 approved + candidate 记忆（含 secret：判重必须看到一切）。
+    1.0.0 给 Store 时池被 Store.list_memories 的 500 条上限截断（更早的完全重复判不出来），
+    给连接时截在 5000。现在不截断；池大于 DEDUP_PREFILTER 时先做字面预筛
+    （规范化全文完全相同的一条不漏 + 切分 BM25 前 max(10·limit, 200) 名），再逐条打分。
+    """
+    from .retrieval import POOL_CAP, _expand_scope, _fetch_pool, lexical_candidates
 
     text = _combine(candidate)
     if not norm_text(text):
@@ -461,7 +470,9 @@ def find_duplicates(store, candidate: dict, limit: int = 10) -> list[dict]:
     con = _connect(store)
     scope_id = candidate.get("scope_id")
     scope_ids = _expand_scope(con, scope_id) if scope_id else None
-    pool = _fetch_pool(store, con, scope_ids, True, 5000)
+    pool = _fetch_pool(store, con, scope_ids, True, POOL_CAP, include_secret=True)
+    if len(pool) > DEDUP_PREFILTER:
+        pool = lexical_candidates(pool, text, max(limit * 10, DEDUP_PREFILTER))
     new_vec = hash_embed(text)
     out: list[dict] = []
     for memory in pool:

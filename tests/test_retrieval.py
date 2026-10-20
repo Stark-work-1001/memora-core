@@ -8,16 +8,21 @@ from __future__ import annotations
 
 import random
 import shutil
+import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from memora_core import db as D
+from memora_core import dedup as DD
 from memora_core import retrieval as R
+from memora_core import vectors as V
 from memora_core.vectors import VectorIndex, cosine, estimate_tokens, hash_embed
 
 # ---------------------------------------------------------------------------
@@ -280,25 +285,23 @@ class TestFusion(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestRecall(Base):
-    def test_hybrid_beats_bm25_only(self):
+    def test_verbatim_topic_recall(self):
+        """冒烟测试，不是质量指标：这份夹具里每条 gold 记忆都逐字含有查询词（写法 B 把它
+        埋在无空格的中文串中间）。1.0.0 的 FTS5 unicode61 bm25 在这里恒为 0.70，那是夹具
+        的常数，不代表 hybrid 比 bm25 好多少。真正的质量门槛是 tests/test_retrieval_eval.py
+        （带标注的 memory-eval-v1）。这里只要求：逐字出现的主题，默认检索与 bm25 都找得全。"""
         rows = []
-        total_h = total_b = 0.0
         for name in QUERIES:
             gold = self.gold[name]
             hybrid = R.search(self.con, None, name, limit=10, strategy="hybrid")
             bm25 = R.search(self.con, None, name, limit=10, strategy="bm25")
-            rh, rb = self.recall_at(hybrid, gold), self.recall_at(bm25, gold)
-            total_h += rh
-            total_b += rb
-            rows.append((name, rh, rb))
-        mean_h = total_h / len(rows)
-        mean_b = total_b / len(rows)
-        for name, rh, rb in rows:
-            print("[Recall@10] %-10s hybrid=%.2f  bm25-only=%.2f" % (name, rh, rb))
-        print("[Recall@10] hybrid=%.3f  bm25-only=%.3f" % (mean_h, mean_b))
+            rows.append((name, self.recall_at(hybrid, gold), self.recall_at(bm25, gold)))
+        mean_h = sum(r[1] for r in rows) / len(rows)
+        mean_b = sum(r[2] for r in rows) / len(rows)
+        print("[Recall@10 verbatim fixture] hybrid=%.3f  bm25=%.3f" % (mean_h, mean_b))
         self.assertGreaterEqual(mean_h, 0.9, "hybrid Recall@10 必须 ≥ 0.9，实测 %.3f" % mean_h)
-        self.assertLessEqual(mean_b, mean_h - 0.2,
-                             "bm25-only 必须明显更低（hybrid %.3f / bm25 %.3f）" % (mean_h, mean_b))
+        self.assertGreaterEqual(mean_b, 0.9, "切分 BM25 应能找到埋在中文串中间的主题，实测 %.3f"
+                                % mean_b)
 
     def test_result_shape(self):
         res = R.search(self.con, None, "判重策略", limit=5)
@@ -654,6 +657,505 @@ class TestPerformance(unittest.TestCase):
         mean_3000 = self._measure(10, "3000")
         self.assertLess(mean_300, 500.0, "300 条时单次检索应远低于 500ms")
         self.assertLess(mean_3000, 3000.0, "3000 条时单次检索不应超过 3 秒")
+
+
+# ---------------------------------------------------------------------------
+# 7. 1.1.0 回归：候选池 / 过滤顺序 / 子串字面匹配 / 敏感度 / 向量缓存 / 响应字段 / 快速失败
+# ---------------------------------------------------------------------------
+
+NOW = "2025-01-01T00:00:00Z"
+
+
+def _insert_many(con, rows):
+    """rows: (id, title, body[, scope, status, updated_at, sensitivity])，一个事务写完。"""
+    full = []
+    for row in rows:
+        mid, title, body = row[:3]
+        scope = row[3] if len(row) > 3 else "global"
+        status = row[4] if len(row) > 4 else "approved"
+        updated = row[5] if len(row) > 5 else NOW
+        sensitivity = row[6] if len(row) > 6 else "normal"
+        full.append((mid, scope, "fact", title, body, "", status, 0.8, 0.5, sensitivity,
+                     NOW, updated, 10))
+    con.execute("BEGIN")
+    con.executemany(
+        "INSERT INTO memory(id, scope_id, kind, title, body, summary, status, trust, importance,"
+        " sensitivity, recorded_at, updated_at, tokens) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", full)
+    con.execute("COMMIT")
+
+
+class _TempDB(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="memora_r11_"))
+        self.db_path = self.tmp / "memora.db"
+        D.init_db(self.db_path)
+        self.con = D.connect(self.db_path)
+
+    def tearDown(self):
+        try:
+            self.con.close()
+        finally:
+            shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def ids(res):
+        return [h["id"] for h in res["hits"]]
+
+
+class TestStorePool(_TempDB):
+    """缺陷 A：给 Store 时 1.0.0 的候选池走 Store.list_memories，被 500 条上限截断。"""
+
+    def test_store_with_more_than_500_memories_finds_the_oldest(self):
+        from memora_core.store import Store
+        rows = [("oldest", "独角兽 记录", "独角兽测试 只出现在这一条里", "global", "approved",
+                 "2020-01-01T00:00:00Z")]
+        rows += [("f%04d" % i, "填充 %d" % i, "无关内容 %d" % i, "global", "approved",
+                  "2025-06-%02dT00:00:00Z" % (1 + i % 28)) for i in range(600)]
+        _insert_many(self.con, rows)
+        store = Store(self.db_path)
+        try:
+            res = R.search(store, None, "独角兽测试", limit=10)
+            self.assertEqual(self.ids(res)[:1], ["oldest"])
+            self.assertEqual(len(R._fetch_pool(store, None, None, False, R.POOL_CAP)), 601)
+            dups = DD.find_duplicates(store, {"title": "独角兽 记录", "scope_id": "global",
+                                              "body": "独角兽测试 只出现在这一条里"}, limit=3)
+            self.assertEqual(dups[0]["id"], "oldest", "完全重复的最老记忆必须被判出来")
+            self.assertGreaterEqual(dups[0]["dup"], 0.99)
+        finally:
+            store.close()
+
+
+class TestFtsLimitAfterFilter(_TempDB):
+    """缺陷 B：1.0.0 的 FTS 查询先 LIMIT 再按作用域/状态过滤，域外强命中挤掉域内结果。"""
+
+    GLOBAL = ["g0", "g1", "g2", "g3", "g4"]
+
+    def _build(self, crowd_scope="workspace:other", crowd_status="approved"):
+        rows = [("g%d" % i, "kafka kafka kafka %d" % i, "kafka") for i in range(3)]
+        rows += [("o%03d" % i, "note %d" % i, "kafka partition notes " + "x " * 5,
+                  crowd_scope, crowd_status) for i in range(150)]
+        rows += [("g%d" % i, "misc %d" % i,
+                  "long text about many things and kafka once " + "filler " * 60)
+                 for i in range(3, 5)]
+        _insert_many(self.con, rows)
+
+    def _fts_ids(self):
+        info: dict = {}
+        pool = R._fetch_pool(self.con, self.con, R._expand_scope(self.con, "global"), False,
+                             R.POOL_CAP, info=info)
+        ranked = R._channel_bm25(self.con, "kafka", {m["id"] for m in pool}, 50, [],
+                                 flt=info["filter"])
+        return sorted(mid for mid, _ in ranked)
+
+    def test_fts_channel_filters_scope_before_limit(self):
+        self._build()
+        self.assertEqual(self._fts_ids(), self.GLOBAL)
+
+    def test_fts_channel_filters_status_before_limit(self):
+        self._build(crowd_scope="global", crowd_status="candidate")
+        self.assertEqual(self._fts_ids(), self.GLOBAL)
+
+    def test_search_returns_all_in_scope_hits_with_either_engine(self):
+        self._build()
+        saved = R.BM25_ENGINE
+        try:
+            for engine in ("lexical", "fts5"):
+                R.BM25_ENGINE = engine
+                for strategy in ("hybrid", "bm25"):
+                    res = R.search(self.con, None, "kafka", scope="global", limit=10,
+                                   strategy=strategy)
+                    self.assertEqual(sorted(self.ids(res)), self.GLOBAL, (engine, strategy))
+        finally:
+            R.BM25_ENGINE = saved
+
+
+class TestLexicalMatching(_TempDB):
+    def test_underscore_is_matched_literally(self):
+        """1.0.0 把 % 和 _ 从 LIKE 模式里删掉：snake_case 变成 '%snakecase%'，
+        找到的是连写的那条，真正写 snake_case 的反而漏掉。"""
+        _insert_many(self.con, [("snake", "命名", "变量名一律用 snake_case 风格"),
+                                ("glued", "命名", "这里写成了 snakecase 连在一起")])
+        ids = self.ids(R.search(self.con, None, "snake_case", limit=10, strategy="substring"))
+        self.assertIn("snake", ids)
+        self.assertNotIn("glued", ids)
+
+    def test_long_question_keeps_ascii_terms(self):
+        """1.0.0 子串通道最多 12 个检索词、中文二元组排在前面，长问句里的 ASCII 词被截掉。"""
+        _insert_many(self.con, [("target", "部署", "部署脚本依赖 kubectl 1.29"),
+                                ("other", "杂项", "其它内容")])
+        query = "我们在生产环境里面部署服务的时候到底依赖哪个版本的 kubectl"
+        self.assertIn("kubectl", R._substring_terms(query))
+        ranked = R._channel_substring(self.con, query, {"target", "other"}, 10)
+        self.assertEqual(ranked[0][0], "target")
+
+    def test_ascii_glued_to_cjk_is_found_by_bm25(self):
+        """unicode61 把 '使用WAL模式' 切成一个 token，FTS 查 wal 查不到；切分 BM25 按文字类别断开。"""
+        _insert_many(self.con, [("wal", "数据库配置", "数据库使用WAL模式保证并发读写"),
+                                ("x", "别的", "完全无关的一条")])
+        self.assertEqual(self.ids(R.search(self.con, None, "WAL", limit=5, strategy="bm25")),
+                         ["wal"])
+        full_width = R.search(self.con, None, "ＷＡＬ 模式", limit=5, strategy="bm25")
+        self.assertEqual(self.ids(full_width)[:1], ["wal"])
+
+    def test_plural_and_prefix_matching(self):
+        _insert_many(self.con, [("mig", "notes", "catalogue migrations broke twice"),
+                                ("lint", "tooling", "the linter runs before commit"),
+                                ("x", "misc", "nothing relevant here")])
+        self.assertEqual(self.ids(R.search(self.con, None, "migration", limit=5,
+                                           strategy="bm25")), ["mig"])
+        self.assertEqual(self.ids(R.search(self.con, None, "lint", limit=5,
+                                           strategy="bm25")), ["lint"])
+
+    def test_stopword_only_query_still_searches(self):
+        _insert_many(self.con, [("a", "what is it", "what is it about"), ("b", "x", "y")])
+        self.assertEqual(self.ids(R.search(self.con, None, "what is it", limit=5,
+                                           strategy="bm25"))[:1], ["a"])
+
+
+class TestSecretExclusion(_TempDB):
+    """sensitivity='secret' 的记忆默认不进智能体召回 / digest；用户界面检索显式 include_secret=True。"""
+
+    def setUp(self):
+        super().setUp()
+        _insert_many(self.con, [
+            ("pub", "部署口令说明", "部署口令放在团队的保管处", "global", "approved", NOW, "normal"),
+            ("sec", "部署口令", "部署口令的保管位置写在这一条", "global", "approved", NOW, "secret"),
+            ("priv", "部署口令备注", "部署口令每季度轮换", "global", "approved", NOW, "private"),
+        ])
+
+    def test_search_excludes_secret_unless_asked(self):
+        for strategy in ("hybrid", "bm25", "substring", "vector", "graph", "bm25+substring"):
+            res = R.search(self.con, None, "部署口令", limit=10, strategy=strategy)
+            self.assertNotIn("sec", self.ids(res), strategy)
+        self.assertEqual(set(self.ids(R.search(self.con, None, "部署口令", limit=10))),
+                         {"pub", "priv"})
+        self.assertIn("sec", self.ids(R.search(self.con, None, "部署口令", limit=10,
+                                               include_secret=True)))
+
+    def test_agent_recall_and_digest_exclude_secret(self):
+        out = R.recall_for_agent(self.con, None, "部署口令", "agent-x", scope="global", limit=10)
+        self.assertNotIn("sec", self.ids(out))
+        self.assertTrue(out["hits"])
+        for kwargs in ({"task": "部署口令"}, {}):
+            pack = R.digest(self.con, None, scope="global", budget=2000, **kwargs)
+            self.assertNotIn("[m:sec]", pack["text"], kwargs)
+            self.assertIn("[m:pub]", pack["text"], kwargs)
+            pack = R.digest(self.con, None, scope="global", budget=2000, include_secret=True,
+                            **kwargs)
+            self.assertIn("[m:sec]", pack["text"], kwargs)
+
+    def test_dedup_still_sees_secret(self):
+        dups = DD.find_duplicates(self.con, {"title": "部署口令", "scope_id": "global",
+                                             "body": "部署口令的保管位置写在这一条"}, limit=3)
+        self.assertEqual(dups[0]["id"], "sec")
+
+
+class _VecGateway:
+    """duck-typed 网关：embed 返回由文本决定的单位向量（维度可控），rerank 不可用。"""
+
+    def __init__(self, dim, label=None, profile=None):
+        self.dim = dim
+        self.calls = []
+        if label:
+            self.embedding_label = label
+        self._profile = profile
+
+    def roles(self):
+        return {"embedding": self._profile} if self._profile else {}
+
+    def embed(self, texts, role="embedding"):
+        self.calls.append(len(texts))
+        out = []
+        for text in texts:
+            rng = random.Random("%s|%d" % (text, self.dim))
+            vec = [rng.gauss(0, 1) for _ in range(self.dim)]
+            norm = sum(v * v for v in vec) ** 0.5
+            out.append([v / norm for v in vec])
+        return out
+
+    def rerank(self, query, docs, top_k=20, role="reranker"):
+        raise RuntimeError("no reranker")
+
+
+class TestVectorCache(_TempDB):
+    def _docs(self, n):
+        _insert_many(self.con, [("d%03d" % i, "文档 %d" % i, "内容 %d 关于检索" % i)
+                                for i in range(n)])
+
+    def test_cloud_vectors_keyed_by_model_and_dim(self):
+        """缺陷 C：1.0.0 所有云端模型共用 'cloud-embed' 键，换维度后按 min(len) 混算。"""
+        self._docs(30)
+        res = R.search(self.con, _VecGateway(64), "检索", limit=5)
+        self.assertEqual(res["vector_model"], "cloud-embed@64")
+        self.assertTrue(res["semantic"])
+        self.assertIn("vector", res["channels_used"])
+        res = R.search(self.con, _VecGateway(32), "检索", limit=5)
+        self.assertEqual(res["vector_model"], "cloud-embed@32")
+        rows = {r[0]: (r[1], r[2], r[3]) for r in self.con.execute(
+            "SELECT model, min(dim), max(dim), count(*) FROM vector GROUP BY model")}
+        self.assertEqual(rows["cloud-embed@64"], (64, 64, 30))
+        self.assertEqual(rows["cloud-embed@32"], (32, 32, 30))
+        pool = R._fetch_pool(self.con, self.con, None, False, R.POOL_CAP)
+        ranked, vecs, key = R._cloud_channel(self.con, _VecGateway(32), "检索", pool, 100, [])
+        self.assertEqual(key, "cloud-embed@32")
+        self.assertTrue(vecs and all(len(v) == 32 for v in vecs.values()))
+
+    def test_model_key_uses_gateway_profile(self):
+        self._docs(5)
+        gw = _VecGateway(16, profile={"provider": "acme", "model": "emb-1"})
+        self.assertEqual(R.search(self.con, gw, "检索", limit=5)["vector_model"], "acme/emb-1@16")
+
+    def test_uncovered_pool_is_reported_and_backfilled(self):
+        """缺陷 E：1.0.0 只为前 400 条补云端向量，其余静默缺席向量通道。"""
+        self._docs(450)
+        gw = _VecGateway(16)
+        first = R.search(self.con, gw, "检索", limit=5)
+        self.assertTrue(any("50/450" in d for d in first["degraded"]), first["degraded"])
+        self.assertEqual(sum(gw.calls), 1 + R.MAX_CLOUD_EMBED)
+        gw.calls.clear()
+        second = R.search(self.con, gw, "检索", limit=5)
+        self.assertFalse(any("还没有" in d for d in second["degraded"]), second["degraded"])
+        self.assertEqual(sum(gw.calls), 1 + 50)
+
+    def test_memories_without_vectors_keep_full_lexical_weight(self):
+        """有 embedding 模型时关键词权重被压低（SEMANTIC_LEXICAL_SCALE），但还没补算到向量的
+        记忆不受影响：唯一字面命中的那条仍排第一。"""
+        self._docs(120)
+        _insert_many(self.con, [("late", "独角兽", "独角兽测试 只在这一条里")])
+        saved = R.MAX_CLOUD_EMBED
+        try:
+            R.MAX_CLOUD_EMBED = 0             # 一条都不补算：只有 query 能嵌入
+            gw = _VecGateway(16)
+            R.search(self.con, gw, "预热", limit=5)
+            R.MAX_CLOUD_EMBED = 120
+            pool = R._fetch_pool(self.con, self.con, None, False, R.POOL_CAP)
+            R._cloud_channel(self.con, gw, "预热", [m for m in pool if m["id"] != "late"], 200, [])
+            R.MAX_CLOUD_EMBED = 0
+            res = R.search(self.con, gw, "独角兽测试", limit=5)
+            self.assertTrue(res["semantic"])
+            self.assertTrue(any("1/121" in d for d in res["degraded"]), res["degraded"])
+            self.assertEqual(self.ids(res)[:1], ["late"])
+        finally:
+            R.MAX_CLOUD_EMBED = saved
+
+    def test_vector_older_than_memory_is_recomputed(self):
+        """缺陷 D 的兜底：缓存向量早于 memory.updated_at 就不再采信。"""
+        _insert_many(self.con, [("m1", "水果", "苹果 香蕉 葡萄 西瓜"),
+                                ("m2", "别的", "完全无关")])
+        R.search(self.con, None, "苹果", limit=5, strategy="vector")      # 缓存草图向量
+        self.con.execute("UPDATE vector SET created_at='2020-01-01T00:00:00Z'")
+        self.con.execute("UPDATE memory SET title='量子', body='量子计算 量子比特 纠缠',"
+                         " updated_at='2024-01-01T00:00:00Z' WHERE id='m1'")
+        res = R.search(self.con, None, "量子计算 量子比特", limit=5, strategy="vector")
+        self.assertEqual(self.ids(res)[:1], ["m1"])
+        cached = VectorIndex(self.con).get("memory", "m1", model=V.MODEL_LOCAL)
+        self.assertAlmostEqual(cosine(cached, hash_embed("量子\n量子计算 量子比特 纠缠")), 1.0,
+                               places=5)
+
+    def test_forget_owner_drops_rows_and_cache(self):
+        index = VectorIndex(self.con)
+        index.put("memory", "m1", hash_embed("一"), model=V.MODEL_LOCAL)
+        index.put("memory", "m1", [1.0, 0.0], model="acme/e@2")
+        index.put("memory", "m2", hash_embed("二"), model=V.MODEL_LOCAL)
+        self.assertIn("m1", V.cached_vectors(self.con, "memory", V.MODEL_LOCAL))
+        self.assertEqual(V.forget_owner(self.con, "memory", "m1"), 2)
+        self.assertNotIn("m1", V.cached_vectors(self.con, "memory", V.MODEL_LOCAL))
+        self.assertIn("m2", V.cached_vectors(self.con, "memory", V.MODEL_LOCAL))
+
+
+class TestReportedFields(Base):
+    """新增响应字段：客户端据此知道实际跑了什么（只增不改，旧字段保持）。"""
+
+    def test_offline_hybrid_has_no_vector_channel(self):
+        res = R.search(self.con, None, "向量检索", limit=5)
+        self.assertEqual(res["channels_used"], ["bm25", "substring", "graph"])
+        self.assertIsNone(res["vector_model"])
+        self.assertFalse(res["semantic"])
+        self.assertFalse(res["reranked"])
+        self.assertEqual(res["score_kind"], "rrf")
+        self.assertTrue(all(h["channels"]["vector"] == 0.0 for h in res["hits"]))
+        self.assertTrue(any("不参与 hybrid" in d for d in res["degraded"]), res["degraded"])
+
+    def test_explicit_vector_strategy_is_labelled_as_sketch(self):
+        res = R.search(self.con, None, "向量检索", limit=5, strategy="vector")
+        self.assertEqual(res["vector_model"], V.MODEL_LOCAL)
+        self.assertFalse(res["semantic"])
+        self.assertTrue(any(V.MODEL_LOCAL in d and "不是语义向量" in d for d in res["degraded"]))
+
+    def test_working_gateway_reports_semantic_and_rerank(self):
+        res = R.search(self.con, FakeGateway(), "模型网关", limit=5)
+        self.assertTrue(res["semantic"])
+        self.assertEqual(res["vector_model"], "cloud-embed@256")
+        self.assertIn("vector", res["channels_used"])
+        self.assertTrue(res["reranked"])
+        self.assertEqual(res["score_kind"], "rrf+rerank")
+
+    def test_channel_combinations(self):
+        res = R.search(self.con, None, "向量检索", limit=5, strategy="substring+bm25")
+        self.assertEqual(res["strategy"], "bm25+substring")
+        self.assertEqual(res["channels_used"], ["bm25", "substring"])
+        res = R.search(self.con, None, "向量检索", limit=5, strategy="bm25+bogus")
+        self.assertEqual(res["strategy"], "hybrid")
+        self.assertTrue(any(d.startswith("strategy") for d in res["degraded"]))
+
+
+def _status_server(status):
+    """固定返回某个 HTTP 状态码的本地桩服务；Handler.hits 记录收到的请求数。"""
+    class Handler(BaseHTTPRequestHandler):
+        hits = 0
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            body = b'{"error": "stub"}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            Handler.hits += 1
+
+        def log_message(self, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, Handler
+
+
+class _HungServer:
+    """接受 TCP 连接、永不回应的端点。"""
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(64)
+        self.port = self.sock.getsockname()[1]
+        self.conns = []
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while True:
+            try:
+                conn, _addr = self.sock.accept()
+            except OSError:
+                return
+            self.conns.append(conn)
+
+    def count(self, expect, wait=1.0):
+        deadline = time.time() + wait
+        while len(self.conns) < expect and time.time() < deadline:
+            time.sleep(0.01)
+        return len(self.conns)
+
+    def close(self):
+        self.sock.close()
+        for conn in self.conns:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+class TestGatewayFailFast(_TempDB):
+    """检索走网关的快速失败模式；传输层失败后该角色熔断，冷却期内不再发请求。"""
+
+    def setUp(self):
+        super().setUp()
+        from memora_core import models as M
+        self.M = M
+        self.saved = (M.INTERACTIVE_TIMEOUT_MS, M.INTERACTIVE_BUDGET_MS)
+        M.INTERACTIVE_TIMEOUT_MS, M.INTERACTIVE_BUDGET_MS = 300, 1500
+        self.clock = [1000.0]
+        self.sleeps = []
+        self.servers = []
+        _insert_many(self.con, [("n%02d" % i, "笔记 %d" % i, "数据库并发 笔记 %d" % i)
+                                for i in range(20)])
+
+    def tearDown(self):
+        self.M.INTERACTIVE_TIMEOUT_MS, self.M.INTERACTIVE_BUDGET_MS = self.saved
+        for server in self.servers:
+            server.close()
+        super().tearDown()
+
+    def _profiles(self, base_url, roles=("embedding", "reranker")):
+        for role in roles:
+            self.con.execute(
+                "INSERT OR REPLACE INTO model_profile(id, role, provider, model, base_url,"
+                " timeout_ms, created_at) VALUES(?,?,?,?,?,?,?)",
+                (role, role, "openai-compatible", "m", base_url, 60000, NOW))
+
+    def _gateway(self):
+        return self.M.ModelGateway(None, db_path=self.db_path, sleep=self.sleeps.append,
+                                   clock=lambda: self.clock[0])
+
+    def test_hung_endpoint_fails_fast_then_breaker_opens(self):
+        hung = _HungServer()
+        self.servers.append(hung)
+        self._profiles("http://127.0.0.1:%d" % hung.port)
+        gw = self._gateway()
+        started = time.perf_counter()
+        res = R.search(self.con, gw, "数据库并发", limit=5)
+        self.assertLess(time.perf_counter() - started, 3.0, "交互式检索必须快速失败")
+        self.assertTrue(res["hits"])
+        self.assertEqual(hung.count(2), 2, "一次 embed + 一次 rerank，不重试")
+        started = time.perf_counter()
+        res = R.search(self.con, gw, "数据库并发", limit=5)
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertEqual(hung.count(3, wait=0.3), 2, "熔断期间不得再发请求")
+        self.assertTrue(any("熔断" in d for d in res["degraded"]), res["degraded"])
+        health = gw.health()
+        for role in ("embedding", "reranker"):
+            self.assertFalse(health[role]["ok"], role)
+            self.assertTrue(health[role]["degraded"], role)
+            self.assertIn("熔断", health[role]["last_error"], role)
+            self.assertTrue(gw.breaker_state(role)["open"], role)
+        self.assertTrue(gw.status()["circuits"]["embedding"]["open"])
+        calls = dict(tuple(r) for r in self.con.execute(
+            "SELECT role, count(*) FROM model_call GROUP BY role"))
+        self.assertEqual(calls, {"embedding": 1, "reranker": 1}, "只记真正发出的请求")
+        self.clock[0] += self.M.BREAKER_COOLDOWN_S + 1          # 冷却期过后放行一次（半开）
+        self.assertFalse(gw.breaker_state("embedding")["open"])
+        R.search(self.con, gw, "数据库并发", limit=5)
+        self.assertEqual(hung.count(4), 4)
+
+    def test_background_calls_retry_and_trip_breaker(self):
+        server, handler = _status_server(503)
+        self.servers.append(_Closer(server))
+        self._profiles("http://127.0.0.1:%d" % server.server_address[1], roles=("embedding",))
+        gw = self._gateway()
+        with self.assertRaises(self.M.ModelUnavailable):
+            gw.embed(["x"])
+        self.assertEqual(handler.hits, 3, "非交互调用照常重试 2 次")
+        self.assertEqual(self.sleeps, [0.5, 1.5])
+        with self.assertRaises(self.M.ModelUnavailable) as ctx:
+            gw.embed(["x"])
+        self.assertEqual(handler.hits, 3)
+        self.assertIn("熔断", ctx.exception.reason)
+        report = gw.test("embedding")                 # 用户主动测连通性不受熔断限制
+        self.assertEqual(handler.hits, 6)
+        self.assertFalse(report["ok"])
+        self.assertNotIn("熔断", report["detail"])
+
+    def test_client_errors_do_not_trip_breaker(self):
+        server, handler = _status_server(401)
+        self.servers.append(_Closer(server))
+        self._profiles("http://127.0.0.1:%d" % server.server_address[1], roles=("embedding",))
+        gw = self._gateway()
+        for expected in (1, 2):
+            with self.assertRaises(self.M.ModelUnavailable):
+                gw.embed(["x"])
+            self.assertEqual(handler.hits, expected)
+        self.assertFalse(gw.breaker_state("embedding")["open"])
+
+
+class _Closer:
+    def __init__(self, server):
+        self.server = server
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
 
 
 if __name__ == "__main__":

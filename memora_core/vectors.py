@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
-"""本地确定性向量 + TF-IDF + 向量缓存。
+"""本地确定性哈希草图 + 向量缓存（vector 表）。
 
-为什么要有这个模块：云端 embedding 不可用时，向量通道不能静默失效，否则混合召回
-退化成纯关键词检索。这里提供一个**跨进程、跨机器完全稳定**的替代实现：
+hash_embed 是**特征哈希**（feature hashing）：把 1/2/3-gram token 哈希进 256 个桶。
+它是一个**词形草图**，不是语义向量 —— 只有字面重叠的文本才会相近，同义改写、跨语言
+都不会。memory-eval-v1 test 集上它单独做检索 nDCG@10 只有 0.287、零结果率 0（任何查询都能
+"相似"到一批记忆），1.0.0 把它混进融合后默认检索（0.455）比纯关键词（0.550）还差
+（python tools/eval_retrieval.py --split test），所以 1.1.0 起它**不再**混进默认 hybrid 融合；
+只在显式 strategy=vector（且没有可用 embedding 模型）时使用，并在响应里标成
+vector_model='local-hash-256'、semantic=false。判重（dedup.score_pair）与 MMR 去冗余
+用它度量"字面有多像"，这正是它擅长的。
 
     hash_embed(text, dim=256)
       1) 切 token：中文按单字、英文按词边界（正则，不用 Python hash()）
@@ -13,7 +19,13 @@
       4) 带符号累加：v[bucket] += sign * (1 + ln(cf))
       5) L2 归一：v ← v / ||v||₂
 
-对应 data/builtin/algorithms.json 的 char-ngram-hash / cosine / tfidf-cosine 三条。
+对应 data/builtin/algorithms.json 的 char-ngram-hash / cosine 两条。
+
+向量缓存的 model 列：本地草图为 'local-hash-256'；云端 embedding 为
+cloud_model_key(provider/model, dim) = 'provider/model@dim'（1.0.0 一律写成常量
+'cloud-embed'，换模型/维度后新旧向量被静默混算）。缓存行的 created_at 与
+memory.updated_at 同格式（UTC ISO-8601 秒），检索只采信 created_at > updated_at 的向量；
+记忆文本改动时调用 forget_owner 主动作废。
 
 确定性保证：blake2b 与取模都是稳定运算；累加按 gram 字典序进行，因此同一文本在
 任何进程、任何机器上得到逐位相同的向量（浮点加法顺序固定）。
@@ -28,12 +40,14 @@ import math
 import operator
 import re
 import sqlite3
+import time
 from array import array
 from pathlib import Path
 
 __all__ = [
     "DIM", "MODEL_LOCAL", "tokenize", "grams", "hash_embed", "cosine",
-    "estimate_tokens", "TfidfModel", "VectorIndex", "pack_vec", "unpack_vec",
+    "estimate_tokens", "VectorIndex", "pack_vec", "unpack_vec",
+    "cloud_model_key", "vector_stamp", "cached_vectors", "forget_owner",
 ]
 
 DIM = 256
@@ -104,7 +118,9 @@ def _bucket_sign(gram: str, dim: int) -> tuple[int, float]:
 
 
 def hash_embed(text: str, dim: int = DIM) -> list[float]:
-    """字符/token 3-gram 哈希向量，L2 归一。空文本返回全零向量。"""
+    """1/2/3-gram token 的特征哈希草图，L2 归一。空文本返回全零向量。
+
+    词形草图，不是语义 embedding：只反映字面重叠。"""
     if dim <= 0:
         raise ValueError("dim must be positive")
     vec = [0.0] * dim
@@ -151,11 +167,10 @@ def cosine(a, b) -> float:
 # ---------------------------------------------------------------------------
 
 def estimate_tokens(text: str) -> int:
-    """token 估算：中文字符 ≈ 1 token，非中文 ≈ 4 字符 / token。
+    """token 估算：中文字符 ≈ 1 token，非中文 ≈ 4 字符 / token，空白不计。
 
-    实测口径（见 docs/retrieval.md）：中文段落误差约 ±8%，中英混排 ±15%，
-    纯英文技术文本（含大量符号/代码）可低估 20%~25%。用途是预算打包的上界控制，
-    不用于精确计费。
+    粗略启发式，只用于预算打包的量级控制，不用于计费。仓库里没有参考 tokenizer，
+    所以它的误差**没有测量过**（1.0.0 文档里的 ±8% / ±15% / 20~25% 无法复现，已撤下）。
     """
     if not text:
         return 0
@@ -165,95 +180,6 @@ def estimate_tokens(text: str) -> int:
     rest -= text.count(" ") + text.count("\n") + text.count("\t")
     rest = max(0, rest)
     return max(1, int(round(cjk + rest / 4.0)))
-
-
-# ---------------------------------------------------------------------------
-# TF-IDF（语料内统计）
-# ---------------------------------------------------------------------------
-
-class TfidfModel:
-    """语料内 TF-IDF 余弦模型。用于同义词不敏感、但术语重叠有效的离线相似度。
-
-        m = TfidfModel().fit([...docs...])
-        m.similarity("a", "b")        # → float
-        m.top_terms("a", k=8)         # → [(term, weight)]
-    """
-
-    def __init__(self, ngram: tuple[int, int] = (1, 2)):
-        self.ngram = ngram
-        self.idf: dict[str, float] = {}
-        self.docs = 0
-        self._terms: list[set[str]] = []
-
-    # -- 内部 ----------------------------------------------------------------
-    def _terms_of(self, text: str) -> list[str]:
-        toks = tokenize(text)
-        lo, hi = self.ngram
-        out: list[str] = []
-        for n in range(max(1, lo), max(1, hi) + 1):
-            if len(toks) < n:
-                continue
-            if n == 1:
-                out.extend(toks)
-            else:
-                out.extend(_GRAM_SEP.join(toks[i:i + n]) for i in range(len(toks) - n + 1))
-        return out
-
-    # -- 训练/推理 -----------------------------------------------------------
-    def fit(self, docs) -> "TfidfModel":
-        df: dict[str, int] = {}
-        self._terms = []
-        n = 0
-        for doc in docs:
-            terms = set(self._terms_of(doc))
-            self._terms.append(terms)
-            for term in terms:
-                df[term] = df.get(term, 0) + 1
-            n += 1
-        self.docs = n
-        self.idf = {t: math.log((1 + n) / (1 + c)) + 1.0 for t, c in df.items()}
-        return self
-
-    def transform(self, text: str) -> dict[str, float]:
-        """→ {term: tf-idf 权重}，已 L2 归一。"""
-        terms = self._terms_of(text)
-        if not terms:
-            return {}
-        tf: dict[str, int] = {}
-        for term in terms:
-            tf[term] = tf.get(term, 0) + 1
-        unknown_idf = math.log((1 + self.docs) / 1.0) + 1.0 if self.docs else 1.0
-        out: dict[str, float] = {}
-        for term, count in tf.items():
-            weight = (1.0 + math.log(count)) * self.idf.get(term, unknown_idf)
-            out[term] = weight
-        norm = math.sqrt(sum(w * w for w in out.values()))
-        if norm > 0:
-            out = {t: w / norm for t, w in out.items()}
-        return out
-
-    def similarity(self, a: str, b: str) -> float:
-        va = self.transform(a)
-        vb = self.transform(b)
-        if not va or not vb:
-            return 0.0
-        if len(va) > len(vb):
-            va, vb = vb, va
-        return sum(w * vb.get(t, 0.0) for t, w in va.items())
-
-    def top_terms(self, text: str, k: int = 8) -> list[tuple[str, float]]:
-        vec = self.transform(text)
-        return sorted(vec.items(), key=lambda kv: -kv[1])[:k]
-
-    def to_dict(self) -> dict:
-        return {"ngram": list(self.ngram), "docs": self.docs, "idf": self.idf}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TfidfModel":
-        model = cls(tuple(data.get("ngram") or (1, 2)))
-        model.docs = int(data.get("docs") or 0)
-        model.idf = dict(data.get("idf") or {})
-        return model
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +224,98 @@ def _open_store(store):
     raise TypeError("VectorIndex 需要 sqlite3.Connection / Store / db 路径，收到 %r" % type(store))
 
 
+def vector_stamp() -> str:
+    """缓存向量的 created_at：UTC ISO-8601 秒，与 memory.updated_at 同格式，可直接按字符串比较。"""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def cloud_model_key(label: str, dim: int) -> str:
+    """云端 embedding 在 vector 表里的 model 键：'provider/model@dim'。
+
+    1.0.0 把所有云端模型都存成常量 'cloud-embed'：换了模型或维度后，旧向量和新查询向量
+    按 min(len) 截断后照样算余弦，结果是无声的垃圾。键里带上模型身份与维度就不会混用。
+    """
+    label = str(label or "").strip() or "cloud-embed"
+    return "%s@%d" % (label, int(dim))
+
+
+# 进程内向量矩阵缓存：(db 文件, owner_kind, model) → (签名, {owner_id: (array, norm, created_at)})
+_MATRIX_CACHE: dict = {}
+_MATRIX_CACHE_LIMIT = 8
+
+
+def _db_key(con: sqlite3.Connection) -> str:
+    try:
+        for row in con.execute("PRAGMA database_list").fetchall():
+            if row[1] == "main":
+                return str(row[2] or "") or "memory:%d" % id(con)
+    except sqlite3.Error:
+        pass
+    return "memory:%d" % id(con)
+
+
+def _forget_cached(con: sqlite3.Connection, owner_kind: str, model: str | None = None) -> None:
+    db = _db_key(con)
+    for key in list(_MATRIX_CACHE):
+        if key[0] == db and key[1] == owner_kind and (model is None or key[2] == model):
+            _MATRIX_CACHE.pop(key, None)
+
+
+def cached_vectors(store, owner_kind: str, model: str) -> dict:
+    """一次读出某个 model 的全部缓存向量：{owner_id: (array('f'), norm, created_at)}。
+
+    结果按 (行数, max(rowid), rowid 之和, 最新 created_at) 做签名缓存在进程内，
+    向量行不变时下次检索不再逐条 SELECT + 解 BLOB（1.0.0 在 1 万条时为此花 170 ms）。
+    本进程内的写入（VectorIndex.put / put_many / forget_owner）会立即作废对应缓存。
+    """
+    con, owned = _open_store(store)
+    try:
+        row = con.execute(
+            "SELECT count(*), coalesce(max(rowid), 0), coalesce(total(rowid), 0),"
+            " coalesce(max(created_at), '') FROM vector WHERE owner_kind=? AND model=?",
+            (owner_kind, model)).fetchone()
+        signature = (int(row[0]), int(row[1]), float(row[2]), str(row[3]))
+        key = (_db_key(con), owner_kind, model)
+        cached = _MATRIX_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        data: dict = {}
+        cur = con.execute("SELECT owner_id, vec, norm, created_at FROM vector"
+                          " WHERE owner_kind=? AND model=?", (owner_kind, model))
+        for owner_id, blob, norm, created_at in cur:
+            arr = array("f")
+            arr.frombytes(blob or b"")
+            data[str(owner_id)] = (arr, float(norm or 0.0), str(created_at or ""))
+        while len(_MATRIX_CACHE) >= _MATRIX_CACHE_LIMIT:
+            _MATRIX_CACHE.pop(next(iter(_MATRIX_CACHE)), None)
+        _MATRIX_CACHE[key] = (signature, data)
+        return data
+    finally:
+        if owned:
+            con.close()
+
+
+def forget_owner(store, owner_kind: str, owner_id: str, model: str | None = None) -> int:
+    """作废某个对象的缓存向量（默认所有 model）。返回作废的行数。
+
+    记忆的 title / body / summary 改动后应调用（store.update_memory），立即释放旧文本的向量。
+    检索另外只采信 created_at > memory.updated_at 的向量作为兜底。
+    """
+    con, owned = _open_store(store)
+    try:
+        if model:
+            cur = con.execute("DELETE FROM vector WHERE owner_kind=? AND owner_id=? AND model=?",
+                              (owner_kind, str(owner_id), model))
+        else:
+            cur = con.execute("DELETE FROM vector WHERE owner_kind=? AND owner_id=?",
+                              (owner_kind, str(owner_id)))
+        _forget_cached(con, owner_kind, model)
+        return int(cur.rowcount or 0)
+    finally:
+        if owned:
+            con.close()
+
+
 class VectorIndex:
     """vector 表的读写封装 + 纯 Python 线性最近邻。
 
@@ -334,20 +352,43 @@ class VectorIndex:
         norm = math.sqrt(sum(v * v for v in vec))
         self.con.execute(
             "INSERT OR REPLACE INTO vector(owner_kind, owner_id, model, dim, vec, norm, created_at)"
-            " VALUES(?,?,?,?,?,?, datetime('now'))",
-            (owner_kind, str(owner_id), model, len(vec), pack_vec(vec), norm),
+            " VALUES(?,?,?,?,?,?,?)",
+            (owner_kind, str(owner_id), model, len(vec), pack_vec(vec), norm, vector_stamp()),
         )
         self._cache.pop(owner_kind, None)
+        _forget_cached(self.con, owner_kind, model)
         return {"owner_kind": owner_kind, "owner_id": str(owner_id), "model": model,
                 "dim": len(vec), "norm": round(norm, 6)}
 
     def put_many(self, owner_kind: str, pairs, model: str | None = None) -> int:
+        """批量写入，一个事务（调用方已在事务里时并入调用方的事务）。"""
         model = model or self.model
-        n = 0
+        stamp = vector_stamp()
+        rows = []
         for owner_id, vec in pairs:
-            self.put(owner_kind, owner_id, vec, model)
-            n += 1
-        return n
+            vec = [float(v) for v in vec]
+            norm = math.sqrt(sum(v * v for v in vec))
+            rows.append((owner_kind, str(owner_id), model, len(vec), pack_vec(vec), norm, stamp))
+        if not rows:
+            return 0
+        began = False
+        if not self.con.in_transaction:
+            self.con.execute("BEGIN")
+            began = True
+        try:
+            self.con.executemany(
+                "INSERT OR REPLACE INTO vector(owner_kind, owner_id, model, dim, vec, norm,"
+                " created_at) VALUES(?,?,?,?,?,?,?)", rows)
+            if began:
+                self.con.execute("COMMIT")
+        except BaseException:
+            if began:
+                self.con.execute("ROLLBACK")
+            raise
+        finally:
+            self._cache.pop(owner_kind, None)
+            _forget_cached(self.con, owner_kind, model)
+        return len(rows)
 
     # -- 读 ----------------------------------------------------------------
     def get(self, owner_kind: str, owner_id: str, model: str | None = None):

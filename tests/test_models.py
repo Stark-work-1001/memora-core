@@ -320,7 +320,11 @@ class TestSecret(GatewayCase):
         self.gw.set_secret("k", "v")
         key_file = self.data_dir / "master.key"
         self.assertTrue(key_file.exists())
-        self.assertEqual(len(key_file.read_bytes()), 32)
+        raw = key_file.read_bytes()
+        if os.name == "nt":  # 1.1.0：Windows 上主密钥由 DPAPI 封装（见 tests/test_secrets.py）
+            self.assertTrue(raw.startswith(b"MKDPAPI1"))
+        else:
+            self.assertEqual(len(raw), 32)
         if os.name == "posix":
             self.assertEqual(key_file.stat().st_mode & 0o777, 0o600)
 

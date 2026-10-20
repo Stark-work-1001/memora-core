@@ -52,15 +52,17 @@ def c_schema(paths, verbose):
     dbm.init_db(paths.db)
     con = dbm.connect(paths.db)
     try:
-        h = dbm.health(con)
+        h = dbm.health(con, deep=True)
     finally:
         con.close()
     if not h["ok"]:
-        raise RuntimeError("integrity: " + h["integrity"])
-    missing = [k for k, v in h["counts"].items() if v < 0]
+        raise RuntimeError("integrity: " + str(h["integrity"]))
+    missing = h["tables"]["missing"]
     if missing:
         raise RuntimeError("missing tables: " + ",".join(missing))
-    return "%d tables, sqlite %s, db %d bytes" % (len(h["counts"]), h["sqlite"], h["db_bytes"])
+    return "%d tables + %d FTS, schema v%d, sqlite %s, db %d bytes" % (
+        h["tables"]["real"], h["tables"]["virtual"], h["schema_version"], h["sqlite"],
+        h["db_bytes"])
 
 
 @check("builtin.assets")

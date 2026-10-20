@@ -2,10 +2,12 @@
 """vault.py 的单元测试：文件名安全化、front-matter 往返、原子写、日更、索引页。"""
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -271,10 +273,20 @@ class DailyTest(unittest.TestCase):
         text = self.vault.read(rel)
         self.assertEqual(text.count("<!-- memora:entry -->"), 3)
         self.assertEqual(text.count("generated_by: memora-core"), 1)
-        for clock in ("00:00:00", "01:00:00", "02:00:00"):
-            self.assertIn(clock, text)
+        for index in range(3):
+            # 条目标题是本地钟点（1.0.0 印的是 UTC 钟点、还不带 Z）
+            utc = calendar.timegm(time.strptime("%sT0%d:00:00" % (day, index), "%Y-%m-%dT%H:%M:%S"))
+            self.assertIn(time.strftime("%H:%M:%S", time.localtime(utc)), text)
         self.assertIn("内容 2", text)
         self.assertLess(text.index("内容 0"), text.index("内容 1"))
+
+    def test_daily_page_is_the_local_calendar_day(self) -> None:
+        """HANDOVER §2：日记按 UTC 切页，东八区早上的工作落进"昨天"。现在按本地日历日。"""
+        local_morning = time.mktime(time.strptime("2026-10-20 07:30:00", "%Y-%m-%d %H:%M:%S"))
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(local_morning))
+        rel = self.vault.append_daily({"title": "morning work", "at": stamp})
+        self.assertEqual(rel, "daily/2026-10-20.md")
+        self.assertIn("## 07:30:00 · morning work", self.vault.read(rel))
 
     def test_entry_metadata(self) -> None:
         rel = self.vault.append_daily({

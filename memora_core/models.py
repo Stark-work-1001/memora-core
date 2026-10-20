@@ -16,12 +16,14 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
 import math
 import os
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -53,6 +55,17 @@ DEFAULT_RETRIES = 2
 DEFAULT_BACKOFF = (0.5, 1.5)
 DEFAULT_TIMEOUT_MS = 60000
 DEFAULT_BATCH = 16
+
+#: 交互式调用（检索）：不重试，单次请求超时 ≤ INTERACTIVE_TIMEOUT_MS，整段 ≤ INTERACTIVE_BUDGET_MS。
+#: 1.0.0 没有这层，挂死的端点让一次检索等 3 次重试 × (pool embed + query embed + rerank) + 退避。
+INTERACTIVE_TIMEOUT_MS = 4000
+INTERACTIVE_BUDGET_MS = 8000
+#: 熔断：某角色出现传输层失败（超时 / 连不上 / 5xx / 429）后，冷却期内直接判不可用、不发请求。
+BREAKER_COOLDOWN_S = 60.0
+
+# 熔断状态按 (数据库, 角色, 档位身份) 放在模块级：服务端 / MCP 会多次构造网关，状态不能丢。
+_BREAKERS: dict = {}
+_BREAKER_LOCK = threading.Lock()
 
 
 # ============================================================
@@ -100,11 +113,56 @@ class JudgeFormatError(ValueError):
 # ============================================================
 # 秘密存储
 # ============================================================
+class SecretKeyUnavailable(ValueError):
+    """主密钥读不出来：文件损坏，或是另一台电脑 / 另一个 Windows 用户用 DPAPI 封装的。"""
+
+
+_DPAPI_MAGIC = b"MKDPAPI1"
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes | None:
+    """Windows DPAPI（当前用户范围）加解密；非 Windows 或调用失败返回 None。只用 ctypes。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+
+    class _Blob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    try:
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+        fn.argtypes = [ctypes.POINTER(_Blob), wintypes.LPCWSTR, ctypes.POINTER(_Blob),
+                       ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(_Blob)]
+        fn.restype = wintypes.BOOL
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        buffer = ctypes.create_string_buffer(bytes(data), len(data))
+        blob_in = _Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
+        blob_out = _Blob()
+        description = "memora-core master key" if protect else None
+        if not fn(ctypes.byref(blob_in), description, None, None, None, 0x1, ctypes.byref(blob_out)):
+            return None
+        try:
+            return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        finally:
+            kernel32.LocalFree(ctypes.cast(blob_out.pbData, ctypes.c_void_p))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class SecretBox:
     """把密钥加密后写进 secret(key, cipher, hint, updated_at)。
 
     **这不是军规级加密**。它是「避免明文落盘」级别：
-      - master key 首次生成 32 字节随机数，写入 data/master.key，权限 0600；
+      - master key 首次生成 32 字节随机数，写入 data/master.key。1.1.0 起在 Windows 上用 DPAPI
+        封装（文件以 MKDPAPI1 开头，绑定当前 Windows 用户）：把 data/ 拷到别的电脑或别的用户，
+        已保存的 API key 需要重新填写；1.0.0 留下的 32 字节明文主密钥照常可用、不被改写；
       - 记录密钥 k_i = HMAC-SHA256(master, b"MEMORA-SECRETS-V1|" + i)
         与明文字节流异或（计数器模式流密码）；
       - 随机 16 字节 nonce 参与每条密钥的派生，同一明文每次密文不同；
@@ -121,34 +179,66 @@ class SecretBox:
     def __init__(self, paths: Paths):
         self.paths = paths
         self.key_path = Path(paths.root) / "master.key"
+        self._key: bytes | None = None
 
     # -- master key ------------------------------------------------
     def _master(self) -> bytes:
+        """读（或首次创建）主密钥。
+
+        1.0.0 的两个问题：长度不对的密钥文件会被**静默替换**（之前保存的全部密钥从此解不开，
+        也没有任何提示）；两个进程第一次同时使用时会各写一把不同的钥匙，先写的那把加密的密钥作废。
+        现在：已有文件绝不覆盖，读不出来就明确报错（SecretKeyUnavailable）；首次创建用独占创建，
+        输掉竞争的一方读取对方的钥匙。
+        """
+        if self._key is not None:
+            return self._key
         try:
             data = self.key_path.read_bytes()
         except FileNotFoundError:
-            data = b""
-        except OSError:
-            data = b""
+            self._key = self._create_master()
+            return self._key
+        except OSError as exc:
+            raise SecretKeyUnavailable("读不到 %s：%s" % (self.key_path.name, exc)) from exc
+        self._key = self._parse_master(data)
+        return self._key
+
+    @staticmethod
+    def _parse_master(data: bytes) -> bytes:
         if len(data) == 32:
-            return data
-        if data:
-            data = hashlib.sha256(data).digest()
-        else:
-            data = os.urandom(32)
+            return data  # 1.0.0 的明文主密钥：照常可用
+        if data.startswith(_DPAPI_MAGIC):
+            plain = _dpapi(data[len(_DPAPI_MAGIC):], protect=False)
+            if plain is not None and len(plain) == 32:
+                return plain
+            raise SecretKeyUnavailable(
+                "master.key 由 Windows DPAPI 绑定在另一台电脑或另一个 Windows 用户上，这里解不开："
+                "已保存的 API key 无法恢复，请在模型页重新填写")
+        raise SecretKeyUnavailable(
+            "master.key 损坏（%d 字节，应为 32 字节或 DPAPI 封装）：已保存的 API key 无法解密。"
+            "文件保持原样、没有被改动；把它改名备份后重新填写 API key 即可" % len(data))
+
+    def _create_master(self) -> bytes:
+        key = os.urandom(32)
+        wrapped = _dpapi(key, protect=True)
+        payload = _DPAPI_MAGIC + wrapped if wrapped else key
         self.key_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.key_path.with_suffix(".key.tmp")
-        tmp.write_bytes(data)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.key_path)
-        try:
-            os.chmod(self.key_path, 0o600)
-        except OSError:
-            pass
-        return data
+            fd = os.open(str(self.key_path), flags, 0o600)
+        except FileExistsError:
+            # 另一个进程刚创建了它：等它写完，用它的钥匙
+            data = b""
+            for _ in range(40):
+                data = self.key_path.read_bytes()
+                if len(data) >= 32:
+                    break
+                time.sleep(0.05)
+            return self._parse_master(data)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return key
 
     def _keystream(self, nonce: bytes, length: int) -> bytes:
         master = self._master()
@@ -373,7 +463,8 @@ class ModelGateway:
     """从 model_profile + 加密密钥读取配置，按 role 调用云端模型。"""
 
     def __init__(self, store=None, *, db_path=None, data_dir=None, retries=DEFAULT_RETRIES,
-                 backoff=DEFAULT_BACKOFF, sleep=None):
+                 backoff=DEFAULT_BACKOFF, sleep=None, breaker_cooldown=BREAKER_COOLDOWN_S,
+                 clock=None):
         self.store = store
         self._self_con = None
         self.paths = Paths(data_dir or self._infer_data_dir(db_path))
@@ -386,6 +477,89 @@ class ModelGateway:
         self._sleep = sleep or time.sleep
         self._box = SecretBox(self.paths)
         self._roles_cache = None
+        self.breaker_cooldown = float(breaker_cooldown)
+        self._clock = clock or time.monotonic
+        self._tls = threading.local()
+
+    # -- 快速失败与熔断 --------------------------------------------
+    @contextlib.contextmanager
+    def interactive(self, budget_ms=None, timeout_ms=None):
+        """交互式调用（检索）的快速失败模式，作用于当前线程，可嵌套（取更紧的一层）：
+        不重试；单次请求超时 ≤ timeout_ms；整段调用总预算 budget_ms，用完后余下的请求
+        直接抛 ModelUnavailable，不再发出。"""
+        prev = getattr(self._tls, "interactive", None)
+        deadline = self._clock() + float(budget_ms or INTERACTIVE_BUDGET_MS) / 1000.0
+        cap = float(timeout_ms or INTERACTIVE_TIMEOUT_MS) / 1000.0
+        if prev:
+            deadline = min(deadline, prev["deadline"])
+            cap = min(cap, prev["cap"])
+        self._tls.interactive = {"deadline": deadline, "cap": cap,
+                                 "budget_ms": int(budget_ms or INTERACTIVE_BUDGET_MS)}
+        try:
+            yield self
+        finally:
+            self._tls.interactive = prev
+
+    def _breaker_key(self, prof: "ModelProfile") -> tuple:
+        return (str(self.db_path), prof.role, prof.id, prof.provider, prof.model, prof.base_url)
+
+    def _breaker_check(self, prof: "ModelProfile") -> None:
+        """熔断打开时直接抛 ModelUnavailable（不发请求、不记 model_call）。冷却期过后放行
+        一次（半开）：成功则关闭，失败则重新打开。连通性测试（test()）不受熔断限制。"""
+        if getattr(self._tls, "bypass_breaker", False):
+            return
+        with _BREAKER_LOCK:
+            state = _BREAKERS.get(self._breaker_key(prof))
+        if not state:
+            return
+        remaining = state["until"] - self._clock()
+        if remaining <= 0:
+            return
+        exc = ModelUnavailable(
+            prof.role, "熔断中：%.0f 秒内不再请求（%s 起，最近失败：%s）"
+            % (remaining, state["opened_at"], state["reason"]),
+            retryable=True, provider=prof.provider, model=prof.model)
+        exc.no_call = True
+        raise exc
+
+    def _breaker_trip(self, prof: "ModelProfile", exc: "ModelUnavailable") -> None:
+        if getattr(exc, "no_call", False) or getattr(exc, "budget_clipped", False):
+            return      # 没发出请求，或超时是我们自己的预算截短的：不怪端点
+        if not (exc.retryable or exc.http_status == 429):
+            return      # 4xx（鉴权、参数）立即失败，不会挂住调用方，改好配置应马上生效
+        key = self._breaker_key(prof)
+        with _BREAKER_LOCK:
+            prev = _BREAKERS.get(key) or {}
+            _BREAKERS[key] = {"until": self._clock() + self.breaker_cooldown,
+                              "reason": str(exc.reason)[:200], "opened_at": _utc_now(),
+                              "failures": int(prev.get("failures") or 0) + 1}
+
+    def _breaker_reset(self, prof: "ModelProfile") -> None:
+        with _BREAKER_LOCK:
+            _BREAKERS.pop(self._breaker_key(prof), None)
+
+    def breaker_state(self, role) -> dict:
+        """{open, retry_in_s, reason, opened_at, failures}；没有熔断记录时 open=False。"""
+        prof = self.roles().get(role)
+        if prof is None:
+            return {"open": False}
+        with _BREAKER_LOCK:
+            state = dict(_BREAKERS.get(self._breaker_key(prof)) or {})
+        if not state:
+            return {"open": False}
+        remaining = state["until"] - self._clock()
+        return {"open": remaining > 0, "retry_in_s": round(max(0.0, remaining), 1),
+                "reason": state.get("reason"), "opened_at": state.get("opened_at"),
+                "failures": state.get("failures")}
+
+    def _log_failure(self, role, prof, exc, started) -> None:
+        """失败留痕；没有真正发出请求的失败（熔断、预算用完）不记 model_call。"""
+        if getattr(exc, "no_call", False):
+            return
+        self.log_call(role, prof.provider, prof.model, False,
+                      http_status=getattr(exc, "http_status", None),
+                      latency_ms=_now_ms() - started,
+                      error=getattr(exc, "reason", None) or str(exc), degraded=True)
 
     # -- 存储适配 --------------------------------------------------
     def _infer_data_dir(self, db_path):
@@ -589,8 +763,23 @@ class ModelGateway:
             headers.setdefault("Authorization", "Bearer " + token)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         timeout = max(1.0, prof.timeout_ms / 1000.0)
+        attempts = self.retries + 1
+        clipped = False     # 超时是被交互预算的剩余时间截短的（不是端点本身慢到 cap）
+        mode = getattr(self._tls, "interactive", None)
+        if mode:
+            remaining = mode["deadline"] - self._clock()
+            if remaining <= 0.05:
+                exc = ModelUnavailable(
+                    prof.role, "交互式调用预算（%d ms）已用完，未发出请求" % mode["budget_ms"],
+                    retryable=False, provider=prof.provider, model=prof.model)
+                exc.no_call = True
+                raise exc
+            attempts = 1
+            full = min(timeout, mode["cap"])
+            timeout = max(0.05, min(full, remaining))
+            clipped = timeout < full
         last = None
-        for attempt in range(self.retries + 1):
+        for attempt in range(attempts):
             started = _now_ms()
             req = urllib.request.Request(url, data=data, headers=headers, method="POST")
             try:
@@ -629,7 +818,10 @@ class ModelGateway:
                     prof.role, ("请求超时：" if timed_out else "网络错误：") + reason[:300],
                     retryable=True, provider=prof.provider, model=prof.model,
                 )
-            if attempt < self.retries:
+                if timed_out and clipped:
+                    last.reason = "交互式调用预算用完（%.1f 秒内未返回）" % timeout
+                    last.budget_clipped = True
+            if attempt < attempts - 1:
                 delay = self.backoff[min(attempt, len(self.backoff) - 1)]
                 self._sleep(delay)
         assert last is not None
@@ -730,6 +922,7 @@ class ModelGateway:
     def chat(self, messages, role="chat", max_tokens=1024, temperature=0.2,
              json_mode=False) -> str:
         prof = self.profile(role)
+        self._breaker_check(prof)
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
         payload = {
@@ -748,9 +941,8 @@ class ModelGateway:
             status, body, latency = self._post(prof, "chat", payload)
             text = self._extract_text(body)
         except ModelUnavailable as exc:
-            self.log_call(role, prof.provider, prof.model, False,
-                          http_status=exc.http_status, latency_ms=_now_ms() - started,
-                          error=exc.reason, degraded=True)
+            self._log_failure(role, prof, exc, started)
+            self._breaker_trip(prof, exc)
             raise
         except ValueError as exc:
             self.log_call(role, prof.provider, prof.model, False, latency_ms=_now_ms() - started,
@@ -758,6 +950,7 @@ class ModelGateway:
             raise ModelUnavailable(role, "响应解析失败：%s" % exc, provider=prof.provider,
                                    model=prof.model) from exc
         pin, pout = self._usage(body)
+        self._breaker_reset(prof)
         self.log_call(role, prof.provider, prof.model, True, http_status=status,
                       latency_ms=latency,
                       prompt_tokens=pin if pin is not None else estimate_tokens(
@@ -768,6 +961,7 @@ class ModelGateway:
     def embed(self, texts, role="embedding", batch=None) -> list:
         """批量向量化；默认 batch=16，**强制 L2 归一化**。失败抛 ModelUnavailable。"""
         prof = self.profile(role)
+        self._breaker_check(prof)
         single = isinstance(texts, str)
         items = [texts] if single else list(texts or [])
         if not items:
@@ -791,9 +985,8 @@ class ModelGateway:
                 status, body, latency = self._post(prof, "embedding", payload)
                 got = self._extract_embeddings(body, len(chunk))
             except ModelUnavailable as exc:
-                self.log_call(role, prof.provider, prof.model, False,
-                              http_status=exc.http_status, latency_ms=_now_ms() - started,
-                              error=exc.reason, degraded=True)
+                self._log_failure(role, prof, exc, started)
+                self._breaker_trip(prof, exc)
                 raise
             except ValueError as exc:
                 self.log_call(role, prof.provider, prof.model, False,
@@ -801,6 +994,7 @@ class ModelGateway:
                 raise ModelUnavailable(role, "向量响应不合法：%s" % exc, provider=prof.provider,
                                        model=prof.model) from exc
             pin, _pout = self._usage(body)
+            self._breaker_reset(prof)
             self.log_call(role, prof.provider, prof.model, True, http_status=status,
                           latency_ms=latency,
                           prompt_tokens=pin if pin is not None else sum(
@@ -841,6 +1035,7 @@ class ModelGateway:
     def rerank(self, query, docs, top_k=20, role="reranker") -> list:
         """返回 [(index, score)] 降序；不支持 rerank 的端点抛 ModelUnavailable。"""
         prof = self.profile(role)
+        self._breaker_check(prof)
         items = [d if isinstance(d, str) else json.dumps(d, ensure_ascii=False)
                  for d in (docs or [])]
         if not items:
@@ -859,9 +1054,8 @@ class ModelGateway:
             status, body, latency = self._post(prof, "rerank", payload)
             pairs = self._extract_rerank(body, len(items))
         except ModelUnavailable as exc:
-            self.log_call(role, prof.provider, prof.model, False,
-                          http_status=exc.http_status, latency_ms=_now_ms() - started,
-                          error=exc.reason, degraded=True)
+            self._log_failure(role, prof, exc, started)
+            self._breaker_trip(prof, exc)
             raise
         except ValueError as exc:
             self.log_call(role, prof.provider, prof.model, False, latency_ms=_now_ms() - started,
@@ -869,6 +1063,7 @@ class ModelGateway:
             raise ModelUnavailable(role, "重排响应不合法：%s" % exc, provider=prof.provider,
                                    model=prof.model) from exc
         pin, _pout = self._usage(body)
+        self._breaker_reset(prof)
         self.log_call(role, prof.provider, prof.model, True, http_status=status,
                       latency_ms=latency,
                       prompt_tokens=pin if pin is not None else estimate_tokens(query) + sum(
@@ -929,6 +1124,8 @@ class ModelGateway:
             return {"ok": False, "mode": "unknown", "detail": "档位不存在", "latency_ms": 0}
         prof = ModelProfile(rows[0])
         started = _now_ms()
+        prev_bypass = getattr(self._tls, "bypass_breaker", False)
+        self._tls.bypass_breaker = True      # 用户主动测连通性：不受熔断限制，成功即关闭熔断
         try:
             if prof.role in ("embedding",):
                 vectors = self.embed(["ping"], role=prof.role)
@@ -944,13 +1141,18 @@ class ModelGateway:
             ok, mode, detail = False, exc.role, exc.reason
         except (JudgeFormatError, ValueError) as exc:
             ok, mode, detail = False, prof.role, str(exc)[:300]
+        finally:
+            self._tls.bypass_breaker = prev_bypass
         return {"ok": ok, "mode": mode, "detail": detail,
                 "latency_ms": int(_now_ms() - started), "provider": prof.provider,
                 "model": prof.model}
 
     def health(self) -> dict:
         """每个 role 返回 {configured, model, provider, ok, degraded, last_error, calls_24h,
-        avg_latency_ms}，0 配置 / 部分配置 / 全配置结构一致。"""
+        avg_latency_ms}，0 配置 / 部分配置 / 全配置结构一致。
+
+        熔断打开期间该角色 ok=false、degraded=true，last_error 写明"熔断中（N 秒后重试）：原因"；
+        完整熔断状态见 breaker_state(role) 与 status()["circuits"]。"""
         window = "strftime('%Y-%m-%dT%H:%M:%SZ','now','-24 hours')"
         counters = {}
         for row in self._rows(
@@ -983,12 +1185,16 @@ class ModelGateway:
                 last_error = errors.get(role) or (stat.get("last_fail_at") and "最近调用失败")
             elif calls == 0 and configured:
                 last_error = None
+            circuit = self.breaker_state(role) if configured else {"open": False}
+            if circuit.get("open"):
+                last_error = "熔断中（%.0f 秒后重试）：%s" % (circuit.get("retry_in_s") or 0,
+                                                       circuit.get("reason") or "")
             out[role] = {
                 "configured": configured,
                 "model": prof.model if prof else None,
                 "provider": prof.provider if prof else None,
-                "ok": configured and not (calls and fails == calls),
-                "degraded": (not configured) or bool(calls and fails),
+                "ok": configured and not (calls and fails == calls) and not circuit.get("open"),
+                "degraded": (not configured) or bool(calls and fails) or bool(circuit.get("open")),
                 "last_error": last_error,
                 "calls_24h": calls,
                 "avg_latency_ms": int(stat.get("avg_ms") or 0),
@@ -999,7 +1205,8 @@ class ModelGateway:
         health = self.health()
         degraded_roles = [r for r, v in health.items() if v["degraded"]]
         return {"roles": health, "degraded": bool(degraded_roles),
-                "degraded_roles": degraded_roles, "db": str(self.db_path)}
+                "degraded_roles": degraded_roles, "db": str(self.db_path),
+                "circuits": {role: self.breaker_state(role) for role in ROLES}}
 
     # -- 角色别名（供上层按语义调用）--------------------------------
     def extractor(self):

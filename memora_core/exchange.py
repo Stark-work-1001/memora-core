@@ -23,7 +23,17 @@ from typing import Any, Iterable
 from . import db as _db
 
 EXCHANGE_SCHEMA = "memora-exchange/1"
+EXCHANGE_MAJOR = "1"
 FORMATS = ("memora", "mem0", "mcp-memory-service", "basic-memory", "generic")
+SENSITIVITIES = frozenset({"normal", "private", "secret"})
+
+# 导入的信任策略（ADR-0002）。
+#   cap       默认：导入文件是不受信来源——"approved" 降为 candidate、信任度封顶 0.5、
+#             证据照录但不算"已核验"。1.0.0 原样采信，一份伪造的导入文件就能写进
+#             "已批准 / 0.99 / user_stated" 的记忆，再经 recall 原文交给 agent。
+#   preserve  人明确要求"原样恢复我自己的备份"：状态、信任度、核验标记照原样写入。
+#             只在 HTTP / 命令行上开放，MCP（agent 通道）永远是 cap。
+TRUST_POLICIES = ("cap", "preserve")
 
 REQUIRED_FIELDS = (
     "schema", "id", "title", "body", "kind", "category", "scope", "agent", "trust",
@@ -214,6 +224,7 @@ def _row_to_exchange(store, row: dict, include_evidence: bool = True) -> dict:
         "importance": _clamp01(row.get("importance"), 0.5),
         "confidence": _clamp01(row.get("confidence"), 0.5),
         "status": row.get("status") or "candidate",
+        "sensitivity": row.get("sensitivity") or "normal",
         "recorded_at": row.get("recorded_at") or "",
         "updated_at": row.get("updated_at") or "",
         "tags": list(meta.get("tags") or []),
@@ -261,11 +272,18 @@ def _row_to_exchange(store, row: dict, include_evidence: bool = True) -> dict:
     return item
 
 
-def export_jsonl(store, *, scope=None, status="approved", include_evidence=True) -> str:
-    """导出为 JSONL 文本；status=None 表示不限状态。"""
+def export_jsonl(store, *, scope=None, status="approved", include_evidence=True,
+                 include_secret=False) -> str:
+    """导出为 JSONL 文本；status=None 表示不限状态。
+
+    sensitivity='secret' 的记忆默认**不导出**（include_secret=True 才导出，且记录里带
+    sensitivity 字段，导入时原样保留）。1.0.0 不看这个字段，secret 记忆随导出文件流出。
+    """
     con = _con(store)
     where: list[str] = []
     params: list[Any] = []
+    if not include_secret:
+        where.append("coalesce(m.sensitivity, 'normal') != 'secret'")
     if status:
         statuses = [str(s) for s in _alist(status) if str(s).strip()]
         if statuses:
@@ -436,6 +454,9 @@ def _base_record(src: dict, *, title: str, body: str, scope: str, tags: list,
     status = _astr(src.get("status")).strip() or "candidate"
     if status not in STATUSES:
         status = "candidate"
+    sensitivity = _astr(src.get("sensitivity")).strip() or "normal"
+    if sensitivity not in SENSITIVITIES:
+        sensitivity = "normal"
     mem_kind = kind if kind in MEMORY_KINDS else "knowledge"
     return {
         "schema": EXCHANGE_SCHEMA,
@@ -452,6 +473,7 @@ def _base_record(src: dict, *, title: str, body: str, scope: str, tags: list,
         "importance": _clamp01(src.get("importance"), 0.5),
         "confidence": _clamp01(src.get("confidence"), 0.5),
         "status": status,
+        "sensitivity": sensitivity,
         "recorded_at": _astr(src.get("recorded_at") or src.get("created_at") or _db.now()),
         "updated_at": _astr(src.get("updated_at") or ""),
         "tags": [str(t) for t in (tags or []) if str(t).strip()],
@@ -500,19 +522,34 @@ def parse_jsonl(text: str) -> tuple[list[dict], list[dict]]:
     return items, errors
 
 
-def import_jsonl(store, text, *, agent_id=None, scope="global", dry_run=False) -> dict:
-    """导入 JSONL；去重后落库，返回 {imported, skipped, deduped, errors}。"""
+def import_jsonl(store, text, *, agent_id=None, scope="global", dry_run=False,
+                 trust="cap") -> dict:
+    """导入 JSONL；去重后落库，返回 {imported, skipped, deduped, errors, demoted, ...}。
+
+    trust 见 TRUST_POLICIES。demoted = 请求 approved、按 cap 策略降为 candidate 的条数。
+    schema 写着 memora-exchange/N 且 N 不是本程序支持的主版本时，该条报错跳过（不猜）。
+    """
+    policy = str(trust or "cap").strip().lower()
+    if policy not in TRUST_POLICIES:
+        raise ValueError("未知导入信任策略: %s（可选 %s）" % (trust, "/".join(TRUST_POLICIES)))
+    origin = "restore" if policy == "preserve" else "import"
     con = _con(store)
     items, errors = parse_jsonl(text)
     report = {
         "imported": 0, "skipped": 0, "deduped": 0, "errors": errors,
         "total": len(items), "dry_run": bool(dry_run), "ids": [], "dedup": [],
-        "formats": {},
+        "formats": {}, "trust_policy": policy, "demoted": 0,
     }
     known = _existing_index(con, scope)
     for index, obj in enumerate(items):
         fmt = detect_format(obj)
         report["formats"][fmt] = report["formats"].get(fmt, 0) + 1
+        version = _unsupported_version(obj) if fmt == "memora" else None
+        if version:
+            report["errors"].append({"index": index, "error": "不支持的交换格式版本 %s（本程序读 %s）"
+                                     % (version, EXCHANGE_SCHEMA)})
+            report["skipped"] += 1
+            continue
         try:
             record = to_memora(obj, fmt, scope)
         except Exception as exc:  # noqa: BLE001
@@ -538,7 +575,9 @@ def import_jsonl(store, text, *, agent_id=None, scope="global", dry_run=False) -
                           "sh": simhash64(title + " " + body), "tokens": _tokens(title + " " + body)})
             continue
         try:
-            saved = _persist(store, record, agent_id=agent_id, scope=scope)
+            saved = _persist(store, record, agent_id=agent_id, scope=scope, origin=origin)
+            if record.get("status") == "approved" and saved.get("status") != "approved":
+                report["demoted"] += 1
         except Exception as exc:  # noqa: BLE001
             report["errors"].append({"index": index, "id": record["id"],
                                      "error": "%s: %s" % (type(exc).__name__, exc)})
@@ -555,8 +594,18 @@ def import_jsonl(store, text, *, agent_id=None, scope="global", dry_run=False) -
         _audit(store, "exchange.import", None,
                {"imported": report["imported"], "skipped": report["skipped"],
                 "deduped": report["deduped"], "errors": len(report["errors"]),
-                "scope": scope, "agent": agent_id})
+                "scope": scope, "agent": agent_id, "trust_policy": policy,
+                "demoted": report["demoted"]})
     return report
+
+
+def _unsupported_version(obj: dict) -> str | None:
+    """memora-exchange/<主版本>[.<次版本>]：主版本不是 EXCHANGE_MAJOR 时返回该版本串。"""
+    schema = _astr(obj.get("schema") if isinstance(obj, dict) else "").strip().lower()
+    if not schema.startswith("memora-exchange/"):
+        return None
+    version = schema.split("/", 1)[1]
+    return None if version.split(".", 1)[0] == EXCHANGE_MAJOR else version
 
 
 def _existing_index(con, scope: str | None = None) -> list[dict]:
@@ -619,7 +668,8 @@ def _audit(store, action: str, target: str | None, detail: Any = None) -> None:
         pass
 
 
-def _persist(store, record: dict, *, agent_id: str | None, scope: str) -> dict:
+def _persist(store, record: dict, *, agent_id: str | None, scope: str,
+             origin: str = "import") -> dict:
     """把一条归一记录写成记忆（含证据/块/实体/边），返回 store 的记忆对象。"""
     scope_id = record.get("scope") or scope or "global"
     payload = {
@@ -637,6 +687,7 @@ def _persist(store, record: dict, *, agent_id: str | None, scope: str) -> dict:
         "importance": record["importance"],
         "confidence": record.get("confidence", 0.5),
         "recorded_at": record.get("recorded_at"),
+        "sensitivity": record.get("sensitivity") or "normal",
         "metadata": {"tags": list(record.get("tags") or []), "imported": EXCHANGE_SCHEMA},
     }
     if record.get("didactic"):
@@ -644,16 +695,16 @@ def _persist(store, record: dict, *, agent_id: str | None, scope: str) -> dict:
     adder = getattr(store, "add_memory", None)
     if not callable(adder):
         raise TypeError("store 缺少 add_memory")
-    memory = adder(payload)
+    memory = adder(payload, origin=origin)
     mid = str(memory.get("id") or record["id"])
-    _attach_evidence(store, mid, record.get("evidence") or [])
+    _attach_evidence(store, mid, record.get("evidence") or [], origin=origin)
     _attach_blocks(store, mid, record.get("blocks") or [])
     _attach_entities(store, mid, record.get("entities") or [], scope_id)
     _attach_edges(store, mid, record.get("edges") or [])
     return memory
 
 
-def _attach_evidence(store, mid: str, evidence: list) -> int:
+def _attach_evidence(store, mid: str, evidence: list, origin: str = "import") -> int:
     fn = getattr(store, "add_evidence", None)
     if not callable(fn):
         return 0
@@ -667,7 +718,8 @@ def _attach_evidence(store, mid: str, evidence: list) -> int:
         try:
             fn(mid, {"kind": kind, "quote": item.get("quote") or "",
                      "uri": item.get("uri") or None, "trust": _clamp01(item.get("trust"), 0.5),
-                     "verified": bool(item.get("verified")), "note": item.get("note") or None})
+                     "verified": bool(item.get("verified")), "note": item.get("note") or None},
+               origin=origin)
             count += 1
         except Exception:  # noqa: BLE001 - 单条证据失败不放弃整条记忆
             continue

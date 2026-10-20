@@ -18,7 +18,7 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
-from .db import now
+from .db import local_clock, local_day, now
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型检查
     from .store import Store
@@ -535,11 +535,14 @@ class Vault:
     # ------------------------------------------------------------ 日更 / 文档 / 报告
 
     def append_daily(self, entry: dict) -> str:
-        """按 UTC 日期追加到 daily/YYYY-MM-DD.md；同日多次追加带分隔与时间戳。"""
+        """按**本地**日历日追加到 daily/YYYY-MM-DD.md；同日多次追加带分隔与本地时间。
+
+        1.0.0 按 UTC 日期切页：东八区早上 8 点前的工作会写进前一天的日记。
+        """
         self._ensure_dirs()
         payload = dict(entry or {})
         stamp = str(payload.get("at") or now())
-        day = str(payload.get("day") or stamp[:10])[:10] or now()[:10]
+        day = str(payload.get("day") or local_day(stamp))[:10] or local_day(now())
         rel_path = "daily/%s.md" % day
         target = self.path(rel_path)
         existing = ""
@@ -573,7 +576,7 @@ class Vault:
 
     @staticmethod
     def _daily_entry(entry: dict, stamp: str) -> str:
-        clock = stamp[11:19] if len(stamp) >= 19 else stamp
+        clock = local_clock(stamp) or (stamp[11:19] if len(stamp) >= 19 else stamp)
         title = str(entry.get("title") or entry.get("summary") or "记录").strip()
         bits: list[str] = []
         if entry.get("kind"):

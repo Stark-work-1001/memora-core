@@ -124,9 +124,11 @@ def cmd_export(args) -> int:
     paths = _data(args)
     from .exchange import export_jsonl
     store = _store(paths)
-    text = export_jsonl(store, scope=args.scope, status=args.status)
+    text = export_jsonl(store, scope=args.scope, status=args.status,
+                        include_secret=args.include_secret)
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+        # write_bytes：JSONL 一律 LF（write_text 在 Windows 上会写成 CRLF）
+        Path(args.out).write_bytes(text.encode("utf-8"))
         print(json.dumps({"written": args.out, "bytes": len(text.encode())}, ensure_ascii=False))
     else:
         sys.stdout.write(text)
@@ -138,7 +140,7 @@ def cmd_import(args) -> int:
     from .exchange import import_jsonl
     store = _store(paths)
     text = Path(args.inp).read_text(encoding="utf-8")
-    out = import_jsonl(store, text, agent_id=args.agent, scope=args.scope)
+    out = import_jsonl(store, text, agent_id=args.agent, scope=args.scope, trust=args.trust)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
@@ -148,7 +150,7 @@ def cmd_doctor(args) -> int:
     dbm.init_db(paths.db)
     con = dbm.connect(paths.db)
     try:
-        h = dbm.health(con)
+        h = dbm.health(con, deep=True)
     finally:
         con.close()
     report = {"version": __version__, "data": paths.as_dict(), "db": h,
@@ -180,10 +182,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.add_argument("--scope", default=None)
     p.add_argument("--status", default="approved")
+    p.add_argument("--include-secret", action="store_true",
+                   help="连 sensitivity=secret 的记忆一起导出（默认不导出）")
     p = sub.add_parser("import"); p.set_defaults(fn=cmd_import)
     p.add_argument("--in", dest="inp", required=True)
     p.add_argument("--agent", default=None)
     p.add_argument("--scope", default="global")
+    p.add_argument("--trust", choices=("cap", "preserve"), default="cap",
+                   help="cap（默认）：导入文件不受信，approved 降为 candidate；"
+                        "preserve：原样恢复你自己的备份（ADR-0002）")
     return ap
 
 

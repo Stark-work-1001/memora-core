@@ -645,35 +645,13 @@ class CandidateConflictTest(unittest.TestCase):
         })
         self.assertEqual(cand["status"], "pending")
         self.assertEqual(cand["dedup"]["jaccard"], 0.1)
-
-        decided = store.decide_candidate(cand["id"], "supersede", target["id"],
-                                         {"verdict": "supersede"}, "applied")
-        self.assertEqual(decided["status"], "applied")
-        self.assertEqual(decided["judge"]["verdict"], "supersede")
-        self.assertEqual(store.get_memory(mem["id"])["status"], "superseded")
-        self.assertEqual(store.get_memory(mem["id"])["superseded_by"], target["id"])
-
-        with self.assertRaises(KeyError):
-            store.decide_candidate("cand-missing", "add", None, {}, "applied")
-        with self.assertRaises(ValueError):
-            store.decide_candidate(cand["id"], "add", None, {}, "nope")
+        self.assertEqual(target["status"], "candidate")
         with self.assertRaises(ValueError):
             store.add_candidate({"action": "nope"})
 
-    def test_candidate_merge_and_apply(self) -> None:
-        store = make_store(self)
-        mem = store.add_memory({"title": "甲", "body": "b", "kind": "fact", "scope_id": "global"})
-        target = store.add_memory({"title": "乙", "body": "b", "kind": "fact", "scope_id": "global"})
-        cand = store.add_candidate({"memory_id": mem["id"], "action": "merge"})
-        store.decide_candidate(cand["id"], "merge", target["id"], {}, "auto_applied")
-        merged = store.get_memory(mem["id"])
-        self.assertEqual(merged["status"], "merged")
-        self.assertEqual(merged["merged_into"], target["id"])
-
-        fresh = store.add_memory({"title": "丙", "body": "b", "kind": "fact", "scope_id": "global"})
-        other = store.add_candidate({"memory_id": fresh["id"], "action": "add"})
-        store.decide_candidate(other["id"], "add", None, {}, "applied")
-        self.assertEqual(store.get_memory(fresh["id"])["status"], "approved")
+    def test_decide_candidate_is_gone(self) -> None:
+        # 它绕过状态机并会自动批准（见 store.py 注释、ADR-0002）；不允许悄悄加回来
+        self.assertFalse(hasattr(make_store(self), "decide_candidate"))
 
     def test_conflicts(self) -> None:
         store = make_store(self)

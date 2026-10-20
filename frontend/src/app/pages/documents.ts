@@ -22,7 +22,7 @@ interface TreeNode {
 function buildTree(docs: DocumentRow[]): TreeNode {
   const root: TreeNode = { name: '', path: '', children: new Map() };
   for (const doc of docs) {
-    const rel = String(doc.rel_path ?? doc.path ?? doc.title ?? doc.id);
+    const rel = docPath(doc);
     const parts = rel.split(/[\\/]/).filter(Boolean);
     let cursor = root;
     parts.forEach((part, index) => {
@@ -37,6 +37,11 @@ function buildTree(docs: DocumentRow[]): TreeNode {
     cursor.doc = doc;
   }
   return root;
+}
+
+/** vault 内相对路径（后端字段 path；1.0.0 读的是不存在的 rel_path）。 */
+function docPath(doc: DocumentRow): string {
+  return String(doc.path || doc.title || doc.id);
 }
 
 export const documentsPage: PageModule = {
@@ -189,7 +194,7 @@ export const documentsPage: PageModule = {
 
     function renderTree(): void {
       const visible = filter
-        ? docs.filter((doc) => String(doc.rel_path ?? doc.path ?? doc.title ?? '').toLowerCase().includes(filter))
+        ? docs.filter((doc) => `${docPath(doc)} ${doc.title ?? ''}`.toLowerCase().includes(filter))
         : docs;
       if (!visible.length) {
         treeHost.replaceChildren(emptyState(
@@ -230,12 +235,13 @@ export const documentsPage: PageModule = {
           host.appendChild(el('button', {
             class: `tree-file ${active ? 'is-active' : ''}`.trim(),
             type: 'button',
-            title: String(doc.rel_path ?? doc.path ?? ''),
+            title: doc.title ? `${doc.title}\n${docPath(doc)}` : docPath(doc),
             onClick: () => void select(doc.id),
+            dataset: { doc: doc.id },
           },
             icon('documents', 12),
             el('span', { class: 'tree-file-name' }, entry.name),
-            el('span', { class: 'tree-file-meta' }, doc.chunks ? `${doc.chunks} 块` : '')));
+            el('span', { class: 'tree-file-meta' }, doc.kind ?? '')));
         }
       }
     }
@@ -250,26 +256,31 @@ export const documentsPage: PageModule = {
       renderTree();
       right.replaceChildren(el('div', { class: 'detail-skeleton' }, skeleton(2), skeleton(6)));
       try {
-        const detail: DocumentDetail = await api.document(id);
-        if (disposed) return;
-        renderPreview(detail);
+        // 详情接口只给元数据与切块预览；原文必须走 /raw（1.0.0 读 detail.raw，永远是空）
+        const [detail, raw] = await Promise.all([
+          api.document(id),
+          api.documentRaw(id).then((text) => ({ text, error: '' }), (error: unknown) => ({ text: '', error: errorMessage(error) })),
+        ]);
+        if (disposed || selectedId !== id) return;
+        renderPreview(detail, raw.text, raw.error);
       } catch (error) {
         if (disposed) return;
         right.replaceChildren(errorState({ error, onRetry: () => void select(id) }));
       }
     }
 
-    function renderPreview(detail: DocumentDetail): void {
-      const raw = detail.raw ?? detail.markdown ?? detail.preview ?? '';
+    function renderPreview(detail: DocumentDetail, raw: string, rawError: string): void {
+      const chunks = Array.isArray(detail.chunks) ? detail.chunks : [];
       const head = el('div', { class: 'detail-head' },
         el('div', { class: 'detail-title-row' },
-          el('h2', { class: 'detail-title' }, detail.title ?? detail.rel_path ?? detail.id)),
+          el('h2', { class: 'detail-title' }, detail.title || docPath(detail))),
         el('div', { class: 'detail-badges' },
           badge(detail.kind ?? 'markdown', 'info'),
           badge(`${fmtBytes(detail.bytes)}`, 'muted'),
-          badge(`${detail.chunks ?? 0} 块`, 'muted'),
-          detail.memories ? badge(`${detail.memories} 条记忆`, 'accent') : null,
-          el('span', { class: 'mono muted-text' }, String(detail.rel_path ?? detail.path ?? detail.id))),
+          badge(`${chunks.length} 块`, 'muted'),
+          detail.origin ? badge(`来源 ${detail.origin}`, 'muted') : null,
+          detail.scope_id ? badge(detail.scope_id, 'muted') : null,
+          el('span', { class: 'mono muted-text' }, docPath(detail))),
         el('div', { class: 'detail-meta-row' },
           el('span', null, `更新 ${fmtRelative(detail.updated_at ?? detail.indexed_at)}`),
           el('span', null, `索引 ${fmtRelative(detail.indexed_at)}`)));
@@ -297,8 +308,8 @@ export const documentsPage: PageModule = {
         reindexBtn,
       );
 
-      const rawCard = card({ title: '原始 Markdown', subtitle: detail.rel_path ?? undefined });
-      const pre = el('pre', { class: 'raw-pre' }, raw || '（空文件或无法读取）');
+      const rawCard = card({ title: '原始 Markdown', subtitle: docPath(detail) });
+      const pre = el('pre', { class: 'raw-pre' }, raw || (rawError ? `无法读取原文：${rawError}` : '（空文件）'));
       rawCard.appendChild(pre);
 
       const renderCard = card({ title: '渲染预览', subtitle: '本地渲染，不请求外部资源' });
@@ -306,15 +317,17 @@ export const documentsPage: PageModule = {
       renderMarkdownInto(body, raw, { math: true, codeMaxLines: 40 });
       renderCard.appendChild(body);
 
-      const chunksCard = detail.chunk_list && detail.chunk_list.length ? card({
+      const chunksCard = chunks.length ? card({
         title: '切块',
-        subtitle: `${detail.chunk_list.length} 块`,
+        subtitle: `${chunks.length} 块（每块预览前 400 字）`,
       }) : null;
-      if (chunksCard && detail.chunk_list) {
-        for (const chunk of detail.chunk_list) {
+      if (chunksCard) {
+        for (const chunk of chunks) {
           chunksCard.appendChild(el('div', { class: 'chunk-row' },
             el('span', { class: 'mono muted-text' }, `#${chunk.ordinal ?? '—'}`),
-            el('span', { class: 'chunk-text' }, (chunk.text ?? '').slice(0, 400)),
+            el('span', { class: 'chunk-text' },
+              chunk.heading ? el('strong', null, `${chunk.heading} · `) : null,
+              (chunk.preview ?? '').slice(0, 400)),
             el('span', { class: 'muted-text' }, chunk.tokens ? `${chunk.tokens} tok` : '')));
         }
       }

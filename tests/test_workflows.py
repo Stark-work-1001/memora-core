@@ -10,7 +10,9 @@
   * 降级：ModelUnavailable → 执行 fallbacks，run partial
   * 并行：同层节点真的并发（峰值并发 > 1）
   * 可见性：节点只读祖先产物，兄弟分支不可见
-  * 取消：cancel_run 后运行落 cancelled
+  * 取消：cancel_run（真的调用它）后运行落 cancelled，取消之后的节点不开始
+  * 模板：节点 kind 全部已注册、只给声明的输入能过 input 闸门（validate_template）
+  更多见 test_workflow_templates / test_workflow_persist / test_workflow_runtime。
   * 提示词模板渲染（prompts.py）
 
 全部使用临时目录里的真实 SQLite，不联网。
@@ -120,6 +122,11 @@ class TestTemplates(WorkflowTestCase):
             for name in (template["fallbacks"] or {}).values():
                 self.assertIn(name, catalog["fallbacks"],
                               "模板 %s 引用了未注册的 fallback: %s" % (template["id"], name))
+            for node in template["nodes"]:
+                self.assertTrue(workflows.known_kind(node["kind"]),
+                                "模板 %s 的节点 %s kind 未注册" % (template["id"], node["id"]))
+            # 校验含：只给声明的输入就能通过 input 节点的必填校验
+            self.assertEqual(workflows.validate_template(template), [], template["id"])
 
     def table_count(self, table: str) -> int:
         return int(self.store.con.execute("SELECT count(*) FROM " + table).fetchone()[0])
@@ -417,14 +424,20 @@ class TestFallback(WorkflowTestCase):
         self.assertEqual(run["steps"][0]["status"], "degraded")
         self.assertIn("reranker", run["degraded"])
 
-    def test_declared_dependency_fallback_runs(self) -> None:
-        """用真实 handler 触发：rerank 在 gw=None 下走 score-passthrough。"""
+    def test_no_model_takes_the_handlers_own_offline_path(self) -> None:
+        """gw=None：rerank 不抛 ModelUnavailable，走处理器自己的分数透传（不是 fallback）。
+
+        fallback 真正被执行的路径（配置了模型、调用时不可用）见
+        test_workflow_templates.TestFallbacksAreOffline。
+        """
         self.store.add_memory({"title": "事务真源", "body": "SQLite 是事务真源。",
                                "kind": "fact", "scope_id": "global", "status": "approved"})
         run = self.run_tpl("hybrid-recall-rerank",
                            {"query": "事务真源", "scope": "global", "budget": 200})
         rerank = [s for s in run["steps"] if s["node_id"] == "rerank"][0]
         self.assertTrue(rerank["degraded"])
+        self.assertEqual(rerank["output"]["algorithm"], "score-passthrough")
+        self.assertEqual([a["kind"] for a in rerank["attempts"]], ["handler"])
         self.assertIsInstance(rerank["output"].get("hits"), list)
 
 
@@ -527,12 +540,14 @@ class TestExecutionSemantics(WorkflowTestCase):
         self.assertTrue(json.loads(row["output"]).get("truncated"))
 
     def test_cancel_run(self) -> None:
+        """真的调用 cancel_run（1.0.0 的这条测试只传了 cancel 回调，从没调用过它）。"""
         gate = threading.Event()
+        started: list = []
 
         def slow(ctx, node):
-            if node["id"] == "first":
-                gate.set()
-            time.sleep(0.05)
+            started.append(node["id"])
+            gate.set()
+            time.sleep(0.2)
             return {"status": "ok", "text": node["id"]}
 
         self.register("t-slow2", slow)
@@ -543,17 +558,21 @@ class TestExecutionSemantics(WorkflowTestCase):
         holder: dict = {}
 
         def runner():
-            holder["run"] = self.run_tpl("t-cancel", {}, cancel=lambda rid: gate.is_set())
+            holder["run"] = self.run_tpl("t-cancel", {})
 
         thread = threading.Thread(target=runner)
         thread.start()
-        gate.wait(timeout=2)
-        time.sleep(0.02)
+        self.assertTrue(gate.wait(timeout=5))
+        run_id = self.store.con.execute(
+            "SELECT id FROM workflow_run WHERE template_id = 't-cancel'").fetchone()[0]
+        response = workflows.cancel_run(self.store, run_id)
         thread.join(timeout=5)
+        self.assertEqual(response["status"], "cancelled")
         run = holder.get("run") or {}
         self.assertEqual(run.get("status"), "cancelled")
-        rows = self.step_rows(run["id"])
-        self.assertTrue(any(r["status"] == "cancelled" for r in rows))
+        self.assertEqual(started, ["first"], "取消之后的节点不能开始")
+        statuses = {r["node_id"]: r["status"] for r in self.step_rows(run["id"])}
+        self.assertEqual(statuses, {"first": "ok", "second": "cancelled"})
 
     def test_cancel_finished_run_conflicts(self) -> None:
         run = self.run_tpl("quick-capture", {"content": "内容", "agent": "dsh"})

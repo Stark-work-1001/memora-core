@@ -5,7 +5,7 @@
 
 const {
   app, BrowserWindow, Menu, Tray, ipcMain, shell, clipboard,
-  nativeImage, dialog,
+  nativeImage, dialog, session,
 } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -57,6 +57,60 @@ function dataDir() {
 
 function docsDir() {
   return path.join(dataDir(), 'vault');
+}
+
+// --------------------------------------------------------------------------- //
+// 来源判定（导航闸、IPC 发送方校验、权限）
+// --------------------------------------------------------------------------- //
+function appOrigin() {
+  return backendPort ? 'http://' + HOST + ':' + backendPort : '';
+}
+
+function isAppUrl(url) {
+  try { return Boolean(appOrigin()) && new URL(url).origin === appOrigin(); } catch (err) { return false; }
+}
+
+function isErrorPage(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'file:' && decodeURIComponent(u.pathname).replace(/\\/g, '/').endsWith('/error.html');
+  } catch (err) { return false; }
+}
+
+function openExternalSafe(url) {
+  if (!/^(https?:|mailto:)/i.test(String(url || ''))) return;
+  // 自检钩子（与 MEMORA_SELFTEST_QUIT_MS 同类）：自动化验证导航闸时只记日志，不真的打开系统浏览器
+  if (process.env.MEMORA_SELFTEST_NO_EXTERNAL) { logEvent('（自检）将交给系统浏览器：' + String(url).slice(0, 200)); return; }
+  shell.openExternal(url).catch(function () { /* ignore */ });
+}
+
+/** 只有本机后端页面和本外壳的错误页可以调用 preload 桥。 */
+function trustedSender(event) {
+  const frame = event && event.senderFrame;
+  const url = frame ? frame.url : '';
+  return isAppUrl(url) || isErrorPage(url);
+}
+
+function guardIpc(handler) {
+  return function (event) {
+    if (!trustedSender(event)) {
+      logEvent('拒绝来自非本机页面的 IPC 调用：' + String(event && event.senderFrame ? event.senderFrame.url : '?').slice(0, 200));
+      throw new Error('IPC 调用方不受信任');
+    }
+    return handler.apply(null, arguments);
+  };
+}
+
+/** 主窗口的权限：只放行剪贴板写入（复制 id 用），其余一律拒绝。Electron 默认全部同意。 */
+function installPermissionPolicy() {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler(function (wc, permission, callback, details) {
+    const url = (details && details.requestingUrl) || (wc ? wc.getURL() : '');
+    callback(permission === 'clipboard-sanitized-write' && isAppUrl(url));
+  });
+  ses.setPermissionCheckHandler(function (_wc, permission, origin) {
+    return permission === 'clipboard-sanitized-write' && isAppUrl(String(origin || '') + '/');
+  });
 }
 
 function logsDir() {
@@ -178,7 +232,8 @@ async function pickPort() {
 
 function checkHealth(port) {
   return new Promise(function (resolve) {
-    const req = http.get({ host: HOST, port: port, path: '/api/health', timeout: 1500 }, function (res) {
+    // lite=1：就绪探针不数行、不扫完整性（1.0.0 每次探活都跑完整 integrity_check，库到 ~0.4 GB 就超时起不来）
+    const req = http.get({ host: HOST, port: port, path: '/api/health?lite=1', timeout: 1500 }, function (res) {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -286,7 +341,13 @@ function handleBackendCrash(code, signal) {
     setSplash('后端意外退出，正在重启…', '退出码 ' + code + (signal ? ' / ' + signal : ''));
     statusToWindow('后端意外退出，正在自动重启…');
     setTimeout(function () {
-      startBackend().catch(function (err) {
+      startBackend().then(function (baseUrl) {
+        // 重启后端口可能变了：主窗口要跟过去（1.0.0 只在手动重启时这样做，自动重启后界面指向旧端口）
+        if (mainWindow && !mainWindow.isDestroyed() && baseUrl) {
+          return mainWindow.loadURL(baseUrl);
+        }
+        return null;
+      }).catch(function (err) {
         if (err && err.superseded) return;
         showErrorPage(err.message || String(err));
       });
@@ -494,10 +555,23 @@ function createMainWindow() {
     if (mainWindow === win) mainWindow = null;
   });
   win.webContents.setWindowOpenHandler(function (detail) {
-    if (/^https?:/i.test(detail.url)) shell.openExternal(detail.url).catch(function () { /* ignore */ });
+    openExternalSafe(detail.url);
     return { action: 'deny' };
   });
-  win.webContents.on('did-fail-load', function (_e, code, desc, url) {
+  // 主窗口只允许停留在本机后端页面（或本外壳的错误页）上；其它导航一律拦下，http(s)/mailto
+  // 交给系统浏览器。1.0.0 没有这道闸：记忆正文里一个 [x](//example.org) 链接就能把带
+  // preload 桥的主窗口导航到外部页面。
+  const guardNavigation = function (event, url) {
+    if (isAppUrl(url) || isErrorPage(url)) return;
+    event.preventDefault();
+    logEvent('拦截主窗口导航：' + String(url).slice(0, 200));
+    openExternalSafe(url);
+  };
+  win.webContents.on('will-navigate', guardNavigation);
+  win.webContents.on('will-redirect', guardNavigation);
+  win.webContents.on('did-fail-load', function (_e, code, desc, url, isMainFrame) {
+    // 子框架（图谱页的脑图 iframe）失败不能把整个应用换成错误页；ERR_ABORTED（-3）是导航被取消
+    if (!isMainFrame || code === -3) return;
     showErrorPage('界面加载失败（' + code + ' ' + desc + '）：' + url);
   });
   mainWindow = win;
@@ -675,7 +749,7 @@ function buildMenu() {
 // IPC
 // --------------------------------------------------------------------------- //
 function registerIpc() {
-  ipcMain.handle('memora:env', function () {
+  ipcMain.handle('memora:env', guardIpc(function () {
     return {
       appVersion: app.getVersion(),
       versions: {
@@ -690,15 +764,17 @@ function registerIpc() {
       dataDir: dataDir(),
       logPath: backendLogPath(),
     };
-  });
-  ipcMain.handle('memora:open-devtools', function () {
+  }));
+  ipcMain.handle('memora:open-devtools', guardIpc(function () {
+    // 打包版不再允许页面自己打开 DevTools（菜单里仍可手动打开）
+    if (!IS_DEV) return false;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.openDevTools({ mode: 'detach' });
     return true;
-  });
-  ipcMain.handle('memora:restart-backend', function () { return restartBackend(); });
-  ipcMain.handle('memora:open-logs', function () { ensureDir(logsDir()); openPathOrWarn(backendLogPath(), '日志文件'); return true; });
-  ipcMain.handle('memora:open-data', function () { ensureDir(dataDir()); openPathOrWarn(dataDir(), '数据目录'); return true; });
-  ipcMain.handle('memora:copy-mcp', function () { copyMcpConfig(); return mcpConfigObject(); });
+  }));
+  ipcMain.handle('memora:restart-backend', guardIpc(function () { return restartBackend(); }));
+  ipcMain.handle('memora:open-logs', guardIpc(function () { ensureDir(logsDir()); openPathOrWarn(backendLogPath(), '日志文件'); return true; }));
+  ipcMain.handle('memora:open-data', guardIpc(function () { ensureDir(dataDir()); openPathOrWarn(dataDir(), '数据目录'); return true; }));
+  ipcMain.handle('memora:copy-mcp', guardIpc(function () { copyMcpConfig(); return mcpConfigObject(); }));
 }
 
 // --------------------------------------------------------------------------- //
@@ -734,6 +810,7 @@ if (!gotLock) {
   app.setAppUserModelId(APP_ID);
 
   app.whenReady().then(function () {
+    installPermissionPolicy();
     registerIpc();
     buildMenu();
     buildTray();

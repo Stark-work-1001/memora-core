@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from memora_core import __version__
 from memora_core import agents as ag
 from memora_core import db as dbmod
 from memora_core import mcp
@@ -90,7 +91,7 @@ class HandshakeTest(unittest.TestCase):
         result = response["result"]
         self.assertEqual(result["protocolVersion"], "2024-11-05")
         self.assertEqual(result["serverInfo"]["name"], "memora-core")
-        self.assertEqual(result["serverInfo"]["version"], "1.0.0")
+        self.assertEqual(result["serverInfo"]["version"], __version__)  # 1.0.0 把版本号硬编码在 mcp.py 里
         self.assertIn("tools", result["capabilities"])
         row = ag._agent_row(self.store, "claude-code")
         self.assertEqual(row["heartbeat_source"], "mcp", "握手必须刷新在场")
@@ -242,9 +243,9 @@ class ToolSurfaceTest(unittest.TestCase):
         created = mcp.dispatch(self.store, None, "memory_remember",
                                {"text": "被其它工具引用的记忆", "title": "锚点"}, "tester")
         mid = created["result"]["id"]
-        # 导出只带 approved，先把锚点记忆审核通过
-        mcp.dispatch(self.store, None, "memory_update",
-                     {"id": mid, "status": "approved"}, "tester")
+        # 导出只带 approved，先把锚点记忆审核通过——由人（store 的 user 来源）批准：
+        # agent 经 memory_update 自己批准已被禁止（ADR-0002，见 tests/test_trust.py）
+        self.store.set_status(mid, "approved")
         session = mcp.dispatch(self.store, None, "memory_session_begin",
                                {"external_id": "s-1", "title": "会话"}, "tester")
         export = mcp.dispatch(self.store, None, "memory_export", {"status": None}, "tester")

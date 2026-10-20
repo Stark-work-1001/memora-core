@@ -2,6 +2,24 @@
    深色 + 青绿主色，等宽数字，卡片化；UI 全部由 brain.js 注入，不依赖任何外部样式表。
    1080p 以下自动收缩内边距，1280×800 起可用。 */
 
+/* 挂载点（#mem-brain / #mem-root / 自造节点）必须撑满视口：.mem-brain-root 的
+   height:100% 以它为参照。挂载点高度为 auto 时整棵树塌成 0 高、画布不可见——
+   1.0.0 发布的脑图页就是这样（tests/brain-render.test.mjs 的拾取断言因此失败）。 */
+.mem-brain-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* 盒模型自带：brain.html 不再加载 app.css（脑图用不到它的任何规则），
+   原先靠 app.css 的全局 box-sizing: border-box 才排对的面板宽高在这里自己声明。 */
+.mem-brain-host,
+.mem-brain-host *,
+.mem-brain-host *::before,
+.mem-brain-host *::after {
+  box-sizing: border-box;
+}
+
 .mem-brain-root {
   position: relative;
   width: 100%;

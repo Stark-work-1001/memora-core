@@ -12,7 +12,7 @@ import './style.css';
 import { el, clear, icon, type Child } from './dom';
 import { EventStream, api, errorMessage, isConnectionIssue } from './api';
 import type { Health, ServerEvent } from './types';
-import { badge, button, errorState, fmtTime, isModalOpen, closeActiveModal, spinner, toast } from './pages/ui';
+import { badge, button, errorState, fmtTime, isModalOpen, closeActiveModal, spinner, toast, trapFocus } from './pages/ui';
 import type { PageContext, PageModule } from './pages/contract';
 
 import { overviewPage } from './pages/overview';
@@ -60,7 +60,6 @@ type Listener = (event: ServerEvent) => void;
 interface AppState {
   page: PageModule;
   params: URLSearchParams;
-  refreshTick: number;
   connection: 'online' | 'degraded' | 'offline' | 'checking';
   health: Health | null;
   lastEventAt: number;
@@ -69,7 +68,6 @@ interface AppState {
 const state: AppState = {
   page: BY_ID.get(DEFAULT_PAGE) as PageModule,
   params: new URLSearchParams(),
-  refreshTick: 0,
   connection: 'checking',
   health: null,
   lastEventAt: 0,
@@ -180,8 +178,11 @@ function setConnection(next: AppState['connection'], health?: Health | null): vo
   if (led) led.className = `status-led tone-${entry.tone} ${next === 'online' || next === 'degraded' ? 'is-on' : ''}`;
   if (text) text.textContent = entry.label;
   clear(connBadge);
+  const degradedList = Array.isArray(state.health?.degraded) ? state.health?.degraded ?? [] : [];
   connBadge.appendChild(badge(entry.label, entry.tone === 'ok' ? 'ok' : entry.tone === 'warn' ? 'warn' : entry.tone === 'danger' ? 'danger' : 'muted',
-    next === 'degraded' ? '云端模型不可用，已切换到本地确定性算法' : undefined));
+    next === 'degraded'
+      ? `降级能力：${degradedList.join('、')}（未配置或不可用的模型角色由本地确定性算法兜底）`
+      : undefined));
   if (next === 'offline' && state.health === null && text) {
     text.textContent = '未连接后端 · 点击重试';
   }
@@ -211,6 +212,7 @@ function highlightNav(id: string): void {
 }
 
 let disposeCurrent: (() => void) | null = null;
+let currentMount: HTMLElement | null = null;
 
 async function renderRoute(): Promise<void> {
   const { id, params } = parseHash();
@@ -227,10 +229,13 @@ async function renderRoute(): Promise<void> {
     disposeCurrent();
     disposeCurrent = null;
   }
-  // 通知旧页面释放资源（SSE 订阅、监听器）
-  content.dispatchEvent(new CustomEvent('mem:dispose'));
+  // 通知旧页面释放资源（SSE 订阅、resize 监听、定时器）。页面都监听在 ctx.mount 上，
+  // 所以必须派发到旧 mount 本身——1.0.0 派发在 #content 且不冒泡，页面从来收不到。
+  if (currentMount) currentMount.dispatchEvent(new CustomEvent('mem:dispose'));
+  currentMount = null;
   content.replaceChildren();
   const mount = el('div', { class: 'page-mount', dataset: { page: page.id } });
+  currentMount = mount;
   content.appendChild(mount);
   content.scrollTop = 0;
 
@@ -257,12 +262,6 @@ async function renderRoute(): Promise<void> {
       unsubs.push(unsub);
       return unsub;
     },
-    get refreshTick() {
-      return state.refreshTick;
-    },
-    get agentId() {
-      return null;
-    },
   };
 
   disposeCurrent = () => {
@@ -281,27 +280,31 @@ async function renderRoute(): Promise<void> {
 }
 
 async function refreshPage(): Promise<void> {
-  state.refreshTick += 1;
   await renderRoute();
 }
 
 /* ---------------------------------------------------------------- 全局搜索面板 */
 
 let paletteEl: HTMLElement | null = null;
+let paletteReturnFocus: HTMLElement | null = null;
 
 function closePalette(): void {
   if (paletteEl) {
     paletteEl.remove();
     paletteEl = null;
+    if (paletteReturnFocus && paletteReturnFocus.isConnected) paletteReturnFocus.focus();
+    paletteReturnFocus = null;
   }
 }
 
 function openPalette(): void {
   if (paletteEl) return;
+  paletteReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const input = el('input', {
     class: 'palette-input',
     type: 'search',
     placeholder: '搜索记忆（标题 / 正文 / 标签）…',
+    'aria-label': '搜索记忆',
     autofocus: true,
   });
   const results = el('div', { class: 'palette-results' });
@@ -310,11 +313,12 @@ function openPalette(): void {
     el('kbd', null, 'Enter'), ' 打开 · ',
     el('kbd', null, 'Esc'), ' 关闭');
 
-  const panel = el('div', { class: 'palette' },
+  const panel = el('div', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': '全局搜索' },
     el('div', { class: 'palette-head' }, icon('search', 16), input),
     results,
     hint);
-  const overlay = el('div', { class: 'palette-overlay', role: 'dialog', 'aria-modal': 'true' }, panel);
+  const overlay = el('div', { class: 'palette-overlay' }, panel);
+  panel.addEventListener('keydown', (ev) => trapFocus(panel, ev));
   document.body.appendChild(overlay);
   paletteEl = overlay;
   input.focus();
@@ -486,7 +490,8 @@ function startStream(): void {
   if (stream) stream.dispose();
   stream = new EventStream((event) => {
     state.lastEventAt = Date.now();
-    if (state.connection === 'offline') void checkHealth();
+    // system 事件携带启停 / 降级变化：重新取一次 health，让侧栏状态如实
+    if (state.connection === 'offline' || event.type === 'system') void checkHealth();
     for (const listener of listeners.slice()) {
       try {
         listener(event);
@@ -494,14 +499,13 @@ function startStream(): void {
         /* 单个订阅者异常不影响其它页面 */
       }
     }
-    if (event.type === 'log' && event.data && typeof event.data.message === 'string') {
-      state.refreshTick += 1;
-    }
   }, (streamState) => {
     if (streamState === 'open') {
-      if (state.connection !== 'degraded') setConnection('online');
+      // 重连成功：以 /api/health 为准（可能是在线，也可能是"在线但模型降级"）
+      if (state.connection === 'offline' || state.connection === 'checking') void checkHealth();
     } else if (streamState === 'closed') {
-      // SSE 断开不立刻判定离线，交给 health 轮询确认
+      // SSE 断开：立刻复查一次 health。确认离线后才进入 8 秒轮询。
+      void checkHealth();
     }
   });
   stream.start();
@@ -514,8 +518,9 @@ let healthTimer: number | undefined;
 async function checkHealth(): Promise<void> {
   try {
     const health = await api.ping();
-    const degraded = Boolean(health.degraded)
-      || (Array.isArray(health.degraded_running) && health.degraded_running.length > 0);
+    // degraded 是**列表**，[] 表示没有降级。1.0.0 写的是 Boolean(health.degraded)，
+    // 而 Boolean([]) === true，于是界面永远显示"降级"、8 秒轮询永不停止。
+    const degraded = Array.isArray(health.degraded) && health.degraded.length > 0;
     setConnection(degraded ? 'degraded' : 'online', health);
     if (!stream) startStream();
   } catch {
@@ -528,8 +533,9 @@ async function checkHealth(): Promise<void> {
 function scheduleHealth(): void {
   if (healthTimer !== undefined) window.clearInterval(healthTimer);
   healthTimer = window.setInterval(() => {
-    // 只在离线或降级时轮询，正常连接靠 SSE 维持状态
-    if (state.connection === 'offline' || state.connection === 'degraded') void checkHealth();
+    // 只在离线时轮询。"在线但降级"（例如没配模型）是稳定状态，不需要每 8 秒问一次；
+    // 连接状态由 SSE 维持，SSE 断开 / system 事件时会主动复查。
+    if (state.connection === 'offline') void checkHealth();
   }, 8000);
 }
 
@@ -539,8 +545,6 @@ async function boot(): Promise<void> {
   buildSidebar();
   buildTopbar();
   bindKeyboard();
-  document.body.appendChild(shell);
-
   mountRoot.appendChild(shell);
   setConnection('checking');
 

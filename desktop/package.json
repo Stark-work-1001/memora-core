@@ -1,7 +1,7 @@
 {
   "name": "memora-core-desktop",
   "productName": "MemoraCore",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "记忆中枢 · 桌面外壳（Electron）",
   "main": "main.cjs",
   "private": true,
@@ -23,6 +23,17 @@
     "asar": true,
     "npmRebuild": false,
     "compression": "store",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true
+    },
     "directories": {
       "output": "../dist/.eb",
       "buildResources": "build"

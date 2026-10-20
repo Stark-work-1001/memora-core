@@ -1,0 +1,93 @@
+# 1.0.0 没有 CI：发布的源码树缺了 memora_core/__init__.py 与 __main__.py，文档里的每条
+# `python -m memora_core ...` 都跑不起来，440 个测试里 3 个必挂——没有任何东西在运行它们。
+# 这条流水线在每次推送与 PR 上跑：后端测试 + 独立验收（tools/verify.py）、前端类型检查 +
+# 构建确定性 + 真浏览器测试、以及桌面版后端打包与"打进去了什么"的检查。
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 标准库后端：不安装任何依赖。verify.py 自己会跑全部单元测试、selftest、真 HTTP 与 MCP stdio。
+      - name: independent verification
+        run: python tools/verify.py
+      - name: retrieval quality (held-out test split)
+        run: python tools/eval_retrieval.py --split test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-${{ matrix.os }}
+          path: reports/VERIFY.json
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        working-directory: frontend
+        run: npm ci
+      - name: typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit -p tsconfig.json
+      # 构建是确定性的：提交的 memora_core/static 必须与源码构建结果逐字节一致
+      - name: build is reproducible from source
+        working-directory: frontend
+        run: |
+          npm run build
+          git diff --exit-code -- ../memora_core/static
+      # 真 Chrome（runner 自带 /usr/bin/google-chrome）+ 真后端
+      - name: browser tests
+        working-directory: frontend
+        env:
+          MEMORA_PYTHON: python
+        run: npm test
+
+  package-backend:
+    runs-on: windows-latest
+    needs: [backend]
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: build tools
+        run: python -m pip install -r tools/requirements-desktop.txt
+      # package.py 结束时用 tools/inspect_exe.py --check 读产物本身：
+      # 有未在 docs/THIRD-PARTY.md 声明的第三方包就失败
+      - name: freeze backend
+        run: python tools/package.py --clean
+      - name: smoke the frozen backend
+        run: dist/memora-backend.exe --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: memora-backend-windows-x64
+          path: dist/memora-backend.exe

@@ -1,14 +1,21 @@
 # 第三方组件与借鉴来源
 
-本项目**后端只使用 Python 标准库**（http.server / sqlite3 / urllib / json / hashlib / hmac /
-zlib / html.parser / concurrent.futures / ctypes），没有运行时第三方依赖。
+**源码运行的后端只使用 Python 标准库**（http.server / sqlite3 / urllib / json / hashlib / hmac /
+zlib / html.parser / concurrent.futures / ctypes）。**桌面版后端**（PyInstaller 单文件）额外内置
+**pypdf**，用于 PDF 吸收；源码运行时没装 pypdf，PDF 吸收会明确报错"需要 pypdf，未安装"（ADR-0005）。
+
+> 1.0.0 的说法与发布包不符：发布的 `memora-backend.exe` 里除了 pypdf，还有 numpy（含 20 MB
+> OpenBLAS）、Pillow、fontTools——构建环境里恰好装着它们，PyInstaller 顺着 pypdf 的可选导入
+> 打了进去，本文没有声明。1.1.0 起构建时排除这些包，并用 `tools/inspect_exe.py --check` 读产物
+> 本身：出现本表之外的第三方包，构建失败。
 
 ## 运行时依赖
 
 | 组件 | 版本 | 许可 | 用途 |
 |---|---|---|---|
-| Python | 3.12 | PSF | 后端运行时 |
+| Python | 3.12 | PSF | 后端运行时（桌面版内置 3.12.10，含 OpenSSL，Apache-2.0） |
 | SQLite (bundled) | 3.4x | Public Domain | 事务真源 + FTS5 全文索引 |
+| pypdf | 6.21.1 | BSD-3-Clause | **仅桌面版后端**：PDF 吸收。许可全文与版权声明：[licenses/pypdf-6.21.1.txt](licenses/pypdf-6.21.1.txt)（发布包里在 `licenses/`） |
 | Electron | 44.7.2 | MIT | 桌面外壳 |
 | three.js | 0.160.1 | MIT | 脑图渲染 |
 | KaTeX | 0.16.47 | MIT | 公式渲染 |

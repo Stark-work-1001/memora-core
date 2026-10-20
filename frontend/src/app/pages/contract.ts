@@ -6,7 +6,11 @@
 import type { Tone } from './ui';
 
 export interface PageContext {
-  /** 页面唯一挂载点，路由切换时整体替换。 */
+  /**
+   * 页面唯一挂载点，路由切换时整体替换。
+   * 离开页面前 main.ts 会在**这个元素上**派发 `mem:dispose`：页面用
+   * `ctx.mount.addEventListener('mem:dispose', …, { once: true })` 释放监听器 / 定时器。
+   */
   mount: HTMLElement;
   /** 跳转到其它路由，可带查询参数（如 { id }）。 */
   navigate(route: string, params?: Record<string, string>): void;
@@ -21,10 +25,6 @@ export interface PageContext {
    * 返回取消订阅函数；页面卸载时会被自动调用。
    */
   onEvent(kinds: string[], handler: () => void): () => void;
-  /** 全局刷新计数（SSE 或手动刷新时递增），页面可据此重载。 */
-  readonly refreshTick: number;
-  /** 当前选择的智能体（如需联动）。 */
-  readonly agentId: string | null;
 }
 
 export interface PageModule {

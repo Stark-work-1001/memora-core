@@ -1,12 +1,16 @@
 {
   "name": "memora-core-frontend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "tsc --noEmit -p tsconfig.json && node build.mjs",
+    "test": "node --test --test-concurrency=1 \"tests/*.test.mjs\"",
+    "test:unit": "node --test tests/brain-layout.test.mjs tests/brain-style.test.mjs",
+    "test:e2e": "node --test tests/e2e-app.test.mjs"
   },
   "dependencies": {
     "three": "0.160.1",

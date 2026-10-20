@@ -3,8 +3,8 @@
     "id": "bm25",
     "name": "BM25 相关性打分",
     "category": "retrieval",
-    "summary": "经典概率检索模型，按词频饱和与文档长度归一给分；FTS5 内置 bm25() 可直接用。",
-    "formula": "score(q,d)=Σ IDF(t)·(f(t,d)·(k1+1))/(f(t,d)+k1·(1-b+b·|d|/avgdl))",
+    "summary": "默认检索的关键词通道（retrieval._channel_bm25_lexical）：Python 侧按文字类别切分——中文/假名/谚文切重叠二元组并以单字回退，英文按词并做复数归一与前缀匹配，查询侧去虚词——在候选池内算 BM25，列权 title 3 / summary 1.5 / body 1。FTS5 unicode61 的 bm25() 作为可选引擎保留（BM25_ENGINE='fts5'），它不切中文。",
+    "formula": "score(q,d)=Σ w_t·IDF(t)·(f(t,d)·(k1+1))/(f(t,d)+k1·(1-b+b·|d|/avgdl)), k1=1.2, b=0.75, IDF=ln(1+(N-df+0.5)/(df+0.5))",
     "reference": "Robertson & Zaragoza 2009",
     "offline": 1,
     "runnable": 1
@@ -13,28 +13,28 @@
     "id": "bm25plus",
     "name": "BM25+",
     "category": "retrieval",
-    "summary": "对长文档中低词频命中的下界补偿，改善短查询召回。",
+    "summary": "对长文档中低词频命中的下界补偿，改善短查询召回。未实现：目录条目，代码里只有标准 BM25。",
     "formula": "score = BM25 + δ·|q∩d|",
     "reference": "Lv & Zhai 2011",
     "offline": 1,
-    "runnable": 1
+    "runnable": 0
   },
   {
     "id": "fts5-trigram",
     "name": "SQLite FTS5 三元组索引",
     "category": "retrieval",
-    "summary": "支持中文/无空格语言子串匹配，牺牲体积换召回。",
+    "summary": "SQLite 内置的三元组分词，可做中文子串匹配，但 1-2 字的词无法 MATCH。产品检索不使用；tools/eval_retrieval.py 把它（trigram / trigram+like）作为对照基线，在 memory-eval-v1 上低于默认检索，数字见 docs/retrieval.md。",
     "formula": "tokenize='trigram'",
     "reference": "SQLite 文档",
     "offline": 1,
-    "runnable": 1
+    "runnable": 0
   },
   {
     "id": "char-ngram-hash",
     "name": "字符 n-gram 哈希向量",
     "category": "embedding",
-    "summary": "无云端 embedding 时的确定性替代：把字符 3-gram 哈希到 256 维并 L2 归一。",
-    "formula": "v[i]=Σ_{g∈grams} h(g)%D==i ? 1 : 0; v←v/||v||",
+    "summary": "特征哈希的词形草图（vectors.hash_embed），不是语义向量：只有字面重叠的文本才相近。用于判重 dup 的余弦分量、打包时 MMR 的冗余度，以及显式 strategy=vector 且没有 embedding 模型时的兜底（响应标 vector_model='local-hash-256'、semantic=false）。不参与默认 hybrid 融合。",
+    "formula": "v[b(g)] += s(g)·(1+ln tf_w(g))，g∈1/2/3-gram token（权 0.5/0.8/1.0），b=blake2b(g)%256，s=±1；v←v/‖v‖₂",
     "reference": "本项目设定（离线兜底）",
     "offline": 1,
     "runnable": 1
@@ -43,17 +43,17 @@
     "id": "tfidf-cosine",
     "name": "TF-IDF 余弦相似度",
     "category": "retrieval",
-    "summary": "语料内统计的词权相似度，作为向量通道的离线版本。",
+    "summary": "语料内统计的词权相似度。未实现：1.0.0 的 vectors.TfidfModel 从未被任何代码调用，1.1.0 已删除。",
     "formula": "cos(a,b)=a·b/(||a||·||b||)",
     "reference": "Salton 1975",
     "offline": 1,
-    "runnable": 1
+    "runnable": 0
   },
   {
     "id": "rrf",
     "name": "倒数排名融合 RRF",
     "category": "fusion",
-    "summary": "多路召回结果按名次融合，无需分数可比；k 越大越平滑。",
+    "summary": "多路召回结果按名次融合，无需分数可比；k 越大越平滑。默认权重 bm25 1.0 / substring 0.5 / graph 0.6 / vector 1.0（向量通道只在有 embedding 模型时参与）。hit.score 是 RRF 原始和，不是 0-1 归一分。",
     "formula": "score(d)=Σ_i w_i/(k+rank_i(d)), k=60",
     "reference": "Cormack et al. 2009",
     "offline": 1,
@@ -73,8 +73,8 @@
     "id": "mmr",
     "name": "最大边际相关 MMR",
     "category": "fusion",
-    "summary": "在相关性与冗余之间折中，用于上下文去重。",
-    "formula": "MMR=argmax_{d∈R\\S}[λ·sim(d,q)−(1−λ)·max_{s∈S}sim(d,s)], λ=0.7",
+    "summary": "在相关性与冗余之间折中，用于上下文去重。只在检索带 token 预算（打包）时启用；rel 为融合分 / 最高分，冗余度用向量通道的向量，没有时用本地词形草图。",
+    "formula": "MMR=argmax_{d∈R\\S}[λ·rel(d)−(1−λ)·max_{s∈S}sim(d,s)], λ=0.7",
     "reference": "Carbonell & Goldstein 1998",
     "offline": 1,
     "runnable": 1
@@ -93,7 +93,7 @@
     "id": "simhash",
     "name": "SimHash 近似去重",
     "category": "dedup",
-    "summary": "64 位指纹，汉明距离 ≤3 视为近重复，O(1) 比较。",
+    "summary": "64 位指纹；判重时以 0.2·(1−hamming/64) 计入三通道 dup 分（dedup.score_pair），不单独按汉明阈值判定。",
     "formula": "h=Σ sign(w_i)·v_i 逐位取符号",
     "reference": "Charikar 2002",
     "offline": 1,
@@ -101,9 +101,9 @@
   },
   {
     "id": "jaccard-shingle",
-    "name": "Jaccard 词袋相似",
+    "name": "Jaccard shingle 相似",
     "category": "dedup",
-    "summary": "5-gram shingle 集合交并比，抗改写。",
+    "summary": "规范化文本的字符 5-gram shingle 集合交并比；判重 dup 的 0.3 权重分量。",
     "formula": "J=|A∩B|/|A∪B|",
     "reference": "—",
     "offline": 1,
@@ -113,11 +113,11 @@
     "id": "levenshtein-norm",
     "name": "归一化编辑距离",
     "category": "dedup",
-    "summary": "字符级差异度量，适合短事实句判重。",
+    "summary": "字符级差异度量，适合短事实句判重。未实现：判重用的是草图余弦 + 5-gram Jaccard + SimHash。",
     "formula": "sim=1−dist(a,b)/max(|a|,|b|)",
     "reference": "Levenshtein 1966",
     "offline": 1,
-    "runnable": 1
+    "runnable": 0
   },
   {
     "id": "exponential-decay",

@@ -227,6 +227,13 @@ def ensure_icon(force: bool = False) -> Path:
 # --------------------------------------------------------------------------- #
 # PyInstaller
 # --------------------------------------------------------------------------- #
+# 冻结时排除的包。它们是 pypdf 的**可选**附加依赖（图像、字体），memora 用不到。1.0.0 的构建环境里
+# 恰好装着它们，PyInstaller 顺着可选导入把 numpy（含 20 MB OpenBLAS）、Pillow、fontTools 全打进了
+# 后端：约占负载的 46%，而 THIRD-PARTY.md 写的是"后端没有第三方运行时依赖"。
+EXCLUDED_MODULES = ("numpy", "PIL", "fontTools", "cryptography", "Crypto", "tkinter",
+                    "IPython", "matplotlib", "pandas", "scipy")
+
+
 def package(clean: bool = False) -> int:
     ensure_icon()
     if not ENTRY.exists():
@@ -264,6 +271,13 @@ def package(clean: bool = False) -> int:
         # 否则 server.py 的静态托管会在打包版里 404 —— 这是"源码能跑、exe 白屏"的经典坑。
         "--add-data", "%s%s%s" % (static_dir, os.pathsep, "memora_core/static"),
     ]
+    for module in EXCLUDED_MODULES:
+        cmd += ["--exclude-module", module]
+    try:
+        import pypdf  # noqa: F401,PLC0415
+        print("[信息] 构建环境有 pypdf %s：桌面版包含 PDF 吸收" % getattr(pypdf, "__version__", "?"))
+    except ImportError:
+        print("[信息] 构建环境没有 pypdf：桌面版的 PDF 吸收会明确报错（见 tools/requirements-desktop.txt）")
     if ICON_ICO.exists():
         cmd += ["--icon", str(ICON_ICO)]
     cmd.append(str(ENTRY))
@@ -282,7 +296,10 @@ def package(clean: bool = False) -> int:
     print("[完成] %s" % exe)
     print("[完成] 字节数 = %d (%.1f MB)  用时 %.1fs" % (size, size / 1048576.0, elapsed))
     print("[完成] 数据资源已内嵌：memora_core/data (schema.sql + builtin/*.json)")
-    return 0
+    # 读产物本身，确认没有未声明的第三方包被顺带打进去
+    sys.path.insert(0, str(REPO / "tools"))
+    import inspect_exe  # noqa: PLC0415
+    return inspect_exe.main([str(exe), "--check"])
 
 
 def main(argv=None) -> int:

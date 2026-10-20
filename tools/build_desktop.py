@@ -240,6 +240,12 @@ def pack_manually(stage: Path) -> tuple:
         shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True, exist_ok=True)
     shutil.copytree(REF_ELECTRON_DIST, stage, dirs_exist_ok=True)
+    # 与 desktop/package.json 的 electronLanguages 保持一致：单语言产品只留 zh-CN（+ en-US 兜底）。
+    # 1.0.0 带了全部 55 个 Chromium 语言包（解压后约 50 MB）。
+    keep = {"zh-CN.pak", "en-US.pak"}
+    for pak in (stage / "locales").glob("*.pak"):
+        if pak.name not in keep:
+            pak.unlink()
 
     source_exe = stage / "electron.exe"
     target_exe = stage / "MemoraCore.exe"
@@ -330,11 +336,26 @@ def verify_layout() -> tuple:
         problems.append("缺少 resources/app.asar 或 resources/app/")
     for item in problems:
         say("  [!] " + item)
+    before = len(problems)
+    locales = sorted(p.name for p in (OUT_DIR / "locales").glob("*.pak"))
+    if len(locales) > 2:
+        problems.append("语言包未裁剪：%d 个（应只有 zh-CN / en-US）" % len(locales))
     if exe.exists():
         say("  主程序：%s (%d 字节)" % (exe, exe.stat().st_size))
     if backend.exists():
         say("  后端  ：%s (%d 字节)" % (backend, backend.stat().st_size))
+        # 读后端产物本身：不得有未声明的第三方包
+        code = run([python_bin(), str(REPO / "tools" / "inspect_exe.py"), str(backend), "--check"])
+        if code != 0:
+            problems.append("后端 exe 里有未声明的第三方包（见上）")
     say("  app   ：%s" % ("app.asar" if app_asar.exists() else "app/ 目录（降级方案）"))
+    say("  语言包：%s" % ", ".join(locales))
+    # 发布前脱敏：产物里不得有构建机的用户名 / 家目录 / 仓库路径 / git 身份
+    code = run([python_bin(), str(REPO / "tools" / "desensitize_scan.py"), str(OUT_DIR)])
+    if code != 0:
+        problems.append("脱敏扫描发现构建机身份信息（见上）")
+    for item in problems[before:]:
+        say("  [!] " + item)
     return exe if exe.exists() else None, len(problems) == 0
 
 

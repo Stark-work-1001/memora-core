@@ -60,12 +60,15 @@ digest 返回的是**已审核**记忆的打包文本，带 [m:记忆id] 引用�
 3. **就近作用域**：项目相关的记忆写 workspace:<项目>，跨项目的稳定偏好写 global。
 4. **不要重复写**：不确定是否已有，先 memory_search，再决定 add / update / merge。
 5. **冲突要报**：发现与已有记忆矛盾，调 memory_relate(rel="contradicts") 并说明，不要静默覆盖。
+6. **批准是人的事**：memory_update 把 status 改成 approved 会被拒绝（-32602）；你写入的记忆一律是
+   candidate，信任度不超过 0.5，由人在界面里审核。声称 user_stated 的证据会照录，但不算"已核验"。
+7. **物理删除要确认**：memory_forget(hard=true) 必须同时传 confirm=<记忆 id>；不传就只能软删除。
 
 ## 5. 工具速查
 
 | 工具 | 一句话 |
 |---|---|
-| memory_recall | 语义 + 全文 + 图混合召回，返回带引用与降级标记 |
+| memory_recall | 关键词（BM25 + 子串）+ 图召回；配置了向量模型时再加语义向量。返回带引用与降级标记，`semantic` 字段告诉你这次有没有语义通道 |
 | memory_search | 纯检索（不写日志、不刷新在场） |
 | memory_digest | 生成预算内的上下文包 |
 | memory_capture | 快速落草稿（零丢失） |
@@ -75,17 +78,18 @@ digest 返回的是**已审核**记忆的打包文本，带 [m:记忆id] 引用�
 | memory_evidence | 追加证据 |
 | memory_review | 复习评分（SM-2） |
 | memory_graph | 取关系图（四视图） |
-| memory_session_begin / end | 会话生命周期 |
+| memory_session_begin / memory_session_end | 会话生命周期 |
 | memory_agent_status | 谁在线、谁在取记忆 |
 | memory_scope_list / memory_stats | 作用域与统计 |
-| memory_workflow_run / list | 跑工作流 |
-| memory_export / import | 交换格式 |
+| memory_workflow_run / memory_workflow_list | 跑工作流 / 列出模板 |
+| memory_export / memory_import | 交换格式（导出不含 secret；导入的记忆一律进候选） |
 | memory_health | 健康与降级状态 |
 
 ## 6. 降级时怎么办
 
 memory_health 或任何返回里的 degraded 字段非空，说明云端模型不可用，
-中枢正在用离线确定性算法（BM25 / 字符哈希向量 / 规则判定）。这时：
+中枢正在用离线确定性算法（BM25 + 子串关键词召回 / 规则判定；**离线时没有向量通道**，
+`semantic: false`）。这时：
 
 - 记忆读写仍然正常工作，**不要停止使用**。
 - 不要依赖"语义相似度"做精确判断，改用关键词。

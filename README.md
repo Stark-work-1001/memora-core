@@ -92,10 +92,12 @@ MCP stdio / MCP HTTP / REST + SSE / 心跳文件 / 本地会话目录扫描。
 
 ### 六、模型接入 / Model access
 
-四个角色分别配置：对话模型、向量模型、重排模型、判定模型。
+六个角色分别配置：对话（chat）、向量（embedding）、重排（reranker）、判定（judge）、
+抽取（extractor，未配置时回落到对话模型）、视觉（vision）。
 支持 OpenAI 兼容端点、DashScope、Ollama。密钥加密落盘，每次调用留痕，失败如实降级。
 
-Four roles configured separately: chat, embedding, reranker and judge. OpenAI-compatible
+Six roles configured separately: chat, embedding, reranker, judge, extractor (falls back to
+chat) and vision. OpenAI-compatible
 endpoints, DashScope and Ollama are supported. Keys are encrypted on disk, every call is
 traced, and failures degrade honestly.
 
@@ -111,7 +113,7 @@ traced, and failures degrade honestly.
 
 ### 桌面版（解压即用）/ Desktop (unzip and run)
 
-1. 下载 `release/memora-core-1.0.0-windows-x64.zip`
+1. 下载 `release/memora-core-1.1.0-windows-x64.zip`
 2. 解压到任意目录
 3. 双击 `MemoraCore\MemoraCore.exe`（或 `启动记忆中枢.cmd`）
 
@@ -151,7 +153,7 @@ The backend uses the Python standard library only — no `pip install` needed. P
 ## 目录结构 / Repository layout
 
     memora_core/            后端（Python，仅标准库）
-      data/schema.sql       23 张表的真源结构
+      data/schema.sql       28 张表（另有 2 张 FTS5 全文虚表）的真源结构
       data/builtin/         18 工作流 / 34 算法 / 6 智能体登记 / 8 提示词
       static/               已打包的前端产物
     frontend/               前端 TypeScript 源码（esbuild 打包）
@@ -203,12 +205,16 @@ The backend uses the Python standard library only — no `pip install` needed. P
 - 演示数据（`tools/seed_demo.py`）中的个人偏好与项目名已替换为合成示例
 - 局域网测试地址改为 RFC 5737 文档保留地址（`192.0.2.0/24`）
 - 运行期数据目录 `data/`（含真实记忆内容）不随仓库分发
-- 构建产物已逐字节扫描，确认不含本机路径或用户名
+- 构建产物逐字节扫描，确认不含构建机的用户名、家目录、仓库路径、主机名与 git 身份：
+  `python tools/desensitize_scan.py dist/`（会钻进 zip 成员、PyInstaller 归档与 `app.asar`）；
+  `tools/build_desktop.py` 与 `tools/release.py` 发现即失败。1.0.0 写了这句承诺，但仓库里没有做这件事的工具
 
 This is a **public release**. Local absolute paths, personal preferences in the demo seed, and a
 real LAN address have been replaced with portable paths, synthetic samples, and the RFC 5737
-documentation range. The runtime data directory is not distributed. Build artifacts were
-scanned byte by byte and contain no local paths or user names.
+documentation range. The runtime data directory is not distributed. Build artifacts are
+scanned byte by byte — including zip members, PyInstaller archives and `app.asar` — for the
+build machine's user name, home directory, repository path, host name and git identity
+(`python tools/desensitize_scan.py dist/`); the desktop build and `tools/release.py` fail on a hit.
 
 ---
 
@@ -268,7 +274,7 @@ turns them into a reusable asset with models.**
 
 **Desktop (unzip and run)**
 
-1. Download `release/memora-core-1.0.0-windows-x64.zip`
+1. Download `release/memora-core-1.1.0-windows-x64.zip`
 2. Unzip it anywhere
 3. Double-click `MemoraCore\MemoraCore.exe` (or `启动记忆中枢.cmd`)
 

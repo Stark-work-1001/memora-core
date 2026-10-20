@@ -33,7 +33,7 @@
     │  ├─ store.py                  # 领域仓库：memory/scope/evidence/block/entity/edge/document/candidate/conflict
     │  ├─ vault.py                  # Markdown 镜像写入、front-matter、索引页、安全文件名
     │  ├─ models.py                 # 模型网关：chat/embedding/reranker/judge + 秘密存储 + 调用日志 + 降级
-    │  ├─ vectors.py                # 本地确定性向量（char n-gram hash / tfidf）+ 云端向量缓存
+    │  ├─ vectors.py                # 本地 hash 词形指纹（确定性，**不是语义**）+ 云端向量缓存（按 provider/model@dim）
     │  ├─ retrieval.py              # BM25 / 向量 / 图 / RRF / 重排 / MMR / 预算打包
     │  ├─ chunking.py               # 语义切块、Markdown 解析（标题/代码/公式/表格）
     │  ├─ ingest.py                 # 文档吸收（md/txt/html/json/jsonl/pdf 文本）
@@ -132,7 +132,7 @@ candidate → approved | rejected；approved → superseded | merged | archived�
     def replace_chunks(doc_id: str, chunks: list[dict]) -> int
     # 候选/冲突/审计
     def add_candidate(data: dict) -> dict
-    def decide_candidate(cid, action, target_id, judge: dict, status) -> dict
+    # decide_candidate 已在 1.1.0 删除（绕过状态机、会自动批准）；采纳裁决走 set_status / update_memory
     def add_conflict(data: dict) -> dict
     def resolve_conflict(cid, resolution) -> dict
     def audit(action, target, actor='system', detail=None) -> None
@@ -172,11 +172,15 @@ candidate → approved | rejected；approved → superseded | merged | archived�
 ### 4.5 retrieval.py
 
     def search(store, gw, query, *, scope=None, limit=20, strategy='hybrid',
-               budget=None, include_candidates=False) -> dict
+               budget=None, include_candidates=False, diversify=None,
+               include_secret=False) -> dict
     # {hits:[{id, kind, title, snippet, score, channels:{bm25,vector,graph}, trust, citation}],
-    #  degraded:[...], took_ms, strategy, total}
-    def digest(store, gw, *, scope, budget=1200, task=None, agent_id=None) -> dict
-    def recall_for_agent(store, gw, query, agent_id, scope, limit=10) -> dict
+    #  degraded:[...], took_ms, strategy, total,
+    #  channels_used, vector_model, semantic, reranked, score_kind}   # 后五个 1.1.0 起
+    def digest(store, gw, *, scope, budget=1200, task=None, agent_id=None,
+               include_secret=False) -> dict
+    def recall_for_agent(store, gw, query, agent_id, scope, limit=10,
+                         include_secret=False) -> dict
 
 ### 4.6 workflows.py
 
@@ -186,7 +190,8 @@ candidate → approved | rejected；approved → superseded | merged | archived�
     def list_templates(store) -> list[dict]
     def seed_templates(store) -> int
 
-**节点种类（必须全部实现，缺失时登记为 noop 并标 degraded）**：
+**节点种类（必须全部实现；模板里出现未登记的种类时，载入校验记为 problems，运行到该步骤直接失败——
+1.0.0 是登记为 noop 并标 degraded，一个什么都没做的 run 报 partial）**：
 input, transform, extract, classify, retrieve, embed, rerank, fuse, judge, verify,
 persist, index, graph, generate, decide, schedule, emit。
 
@@ -271,8 +276,8 @@ memory_export, memory_import, memory_health。
 |---|---|---|
 | 抽取 | LLM 抽取 | 规则抽取（标题+句子切分+意图词） |
 | 分类 | LLM 分类 | 关键词规则分类 |
-| 向量 | 云端 embedding | 本地 char n-gram hash（256 维） |
-| 重排 | cross-encoder | 分数透传 + FTS 加权 |
+| 向量 | 云端 embedding | **无向量通道**（hybrid 只跑关键词 + 图；`strategy=vector` 退回本地 hash 指纹并在 degraded 里说明） |
+| 重排 | cross-encoder | 不重排，保持 RRF 顺序（`reranked: false`） |
 | 判定 | judge 模型 | 阈值规则（cos / jaccard / simhash） |
 | 摘要 | LLM | 首句/抽取式 |
 

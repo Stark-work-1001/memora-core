@@ -1,0 +1,6 @@
+# 构建桌面版后端（tools/package.py）所需，且只有这些。产品后端本身只用标准库。
+# pypdf：桌面版内置 PDF 吸收（BSD-3-Clause，见 docs/THIRD-PARTY.md）；源码运行时可不装，
+#        届时 PDF 吸收明确报错"需要 pypdf，未安装"。
+# 版本与 1.0.0 发布包里实际打进去的一致（从发布的 exe 里读出：pypdf 6.21.1）。
+pyinstaller==6.22.3
+pypdf==6.21.1

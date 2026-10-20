@@ -8,6 +8,6 @@
 from __future__ import annotations
 
 __all__ = ["__version__", "APP_NAME", "APP_NAME_ZH"]
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 APP_NAME = "memora-core"
 APP_NAME_ZH = "记忆中枢"

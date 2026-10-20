@@ -86,6 +86,7 @@ definition / theorem / property / formula / derivation / example。
     contradicts   互相矛盾（触发冲突工作流）
     supersedes    新版本取代旧版本
     derived_from  派生来源
+    mentions      提及（记忆提到某个实体）
     prerequisite  学习先修
     alias         别名（实体归一）
     temporal_next 时间相邻
@@ -114,7 +115,7 @@ valid_from / valid_to（双时序：何时为真 vs 何时被记录）。
 | merge | 互补且同主题 | 合并正文，保留双方来源 |
 | supersede | 新版本取代旧版本（含时间先后） | 旧置 superseded，记 valid_to |
 | link | 相关但独立 | 建立边，不合并 |
-| noop | 完全重复（simhash 汉明 ≤ 3 且语义一致） | 仅追加证据 |
+| noop | 完全重复（归一化文本相同，或去重分 dup ≥ 0.92 且没有更强的证据） | 仅追加证据 |
 | ask | 冲突且证据不足 | 进人工审核队列 |
 
 > **顺序约束**：ASK 必须排在 MERGE **之前**。一旦自动合并把冲突压平，用户就永远看不到

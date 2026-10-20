@@ -1,4 +1,38 @@
-# Release Notes — memora-core 1.0.0 · 记忆中枢
+# Release Notes — memora-core 1.1.0 · 记忆中枢
+
+## 1.1.0 · 中文
+
+**1.1.0 —— 说到做到。** 不加新花样，先让 1.0.0 已经说出口的每一件事真的成立，并让 CI 持续核对：
+
+- 3D 脑图在 1.0.0 的发布包里是空白的（两个独立原因），现在能看了；总览页等 12 个页面在真实数据上显示的
+  数字与接口一致（1.0.0 的总览在有 21 条记忆时显示 0）。
+- 任何网页都能往 1.0.0 里写"已批准"的记忆并经召回交给 agent——现在跨站写请求一律拒绝，agent、
+  导入文件与工作流都不能自我认证。**行为变化**：导入的 `approved` 记录默认进候选（恢复自己的备份
+  用 `trust: "preserve"`）；agent 不能批准记忆；MCP 物理删除需要 `confirm`。
+- 检索质量第一次有了可复现的测量：默认混合检索在留出测试集上 nDCG@10 0.455 → 0.602
+  （`python tools/eval_retrieval.py --split test`）。
+- 工作流：异步运行与实时进度、真正能用的取消、遗忘与推翻真的生效、job 有执行器。
+- 发布包 211.6 MiB → 160.5 MiB；后端 31.1 MiB → 11.5 MiB；启动与健康检查在大库上不再超时。
+- 更正：1.0.0 说明里"440 项测试全部通过"在发布的源码树上不成立（缺两个模块，3 项失败）。
+
+**下载**：`memora-core-1.1.0-windows-x64.zip`（`SHA256SUMS.txt` 同目录）。顶层的
+`memora-backend.exe` 已弃用、1.2.0 移除；MCP 宿主请改用桌面程序「复制 MCP 配置」给出的路径。
+完整说明：[CHANGELOG.md](CHANGELOG.md)、[HANDBACK.md](HANDBACK.md)、[docs/adr/](docs/adr/)。
+
+## 1.1.0 · English
+
+**1.1.0 — make it true.** No new surface; everything 1.0.0 already claimed now holds, and CI keeps
+checking it: the 3D graph renders (it was blank in the 1.0.0 release); every page shows the numbers
+the API returns; cross-site writes are refused and nothing but a human can approve a memory
+(**behaviour change**: imported `approved` records land as candidates unless `trust: "preserve"`;
+agents cannot approve; MCP hard delete needs `confirm`); retrieval is measured for the first time
+(default hybrid nDCG@10 0.455 → 0.602 on the held-out split); workflows run asynchronously with
+progress and real cancellation; the release shrinks from 211.6 MiB to 160.5 MiB. Correction: the
+1.0.0 note "all 440 tests pass" did not hold for the published source tree.
+
+---
+
+# 1.0.0
 
 ## 中文
 

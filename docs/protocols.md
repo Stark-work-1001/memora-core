@@ -27,7 +27,10 @@ stdio 启动命令：`python -m memora_core --data <数据目录> mcp-stdio`
     <- {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}}
 
 - stdout **只允许**写协议帧；任何调试输出必须走 stderr（`_stderr()`）。
-- 通知（无 `id`，如 `notifications/initialized`）**不回帧**。
+- 通知（无 `id`，如 `notifications/initialized`）在 stdio 上**不回帧**；HTTP `/mcp` 上回
+  `200 {"jsonrpc":"2.0","id":null,"result":{}}`（与 1.0.0 相同，保持兼容）。
+- 任何一帧出错（含 `params`、`clientInfo`、`_meta` 不是对象）都回 JSON-RPC 错误帧，**不会**让
+  stdio 进程退出（1.0.0 一帧畸形的 `_meta` 就让进程以退出码 1 结束）。
 - 解析失败回 `-32700`，未知方法回 `-32601`，参数错回 `-32602`，内部错回 `-32603`。
 - 任何异常都会被 `dispatch()` 捕获转成错误帧，**绝不污染协议流**。
 
@@ -186,5 +189,5 @@ status=None 表示不限状态。证据/块/实体/边总是随记忆一起导�
 | chunking | 退化为段落切块（_fallback_chunks） |
 | dedup | 退化为本地 simhash + Jaccard + 余弦 |
 | vault | 镜像失败只记审计，真源照常写入 |
-| models | memory_health 如实报告 models.degraded |
+| models | memory_health 的 `degraded` 逐个列出不可用的角色（`model:<role> 不可用`）；`ok` 只表示中枢本身可用（1.0.0 读错了键，没配任何模型时也报 `degraded: []`） |
 | pypdf | PDF 吸收明确报错"需要 pypdf，未安装" |

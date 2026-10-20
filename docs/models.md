@@ -4,7 +4,7 @@
 
 ## 0. 一句话
 
-`ModelGateway` 把 chat / embedding / reranker / judge 四种角色接到云端，密钥加密落盘，
+`ModelGateway` 把 chat / embedding / reranker / judge / extractor / vision 六种角色接到云端，密钥加密落盘，
 每次调用留痕，**任何失败都抛** `ModelUnavailable`，由上层走确定性降级并标 `degraded=true`。
 网关**永远不会**返回零向量、假 embedding 或编造的 JSON。
 
@@ -107,7 +107,10 @@ rerank 认 `results[].index` 配 `relevance_score` 或 `score`，也认顶层 `d
 
 ## 3. 密钥安全
 
-- master key：`data/master.key`，首次启动生成 32 字节随机数，权限 0600。
+- master key：`data/master.key`，首次使用时生成 32 字节随机数；1.1.0 起在 Windows 上用 DPAPI
+  封装（文件以 `MKDPAPI1` 开头，绑定当前 Windows 用户）。1.0.0 留下的 32 字节明文主密钥照常可用。
+  已有文件绝不覆盖：损坏或在别处封装的主密钥抛 `SecretKeyUnavailable`，说明原因（1.0.0 会静默替换）。
+  首次创建用独占创建，两个进程同时首次使用不会各写一把。
 - 派生：`k = HMAC-SHA256(master, "MEMORA-SECRETS-V1" | nonce | counter)`，与明文字节异或（计数器模式流密码）。
 - 每条密文带 16 字节随机 nonce，同一明文两次加密结果不同。
 - 完整性：`HMAC-SHA256(master, "MEMORA-SECRETS-AUTH-V1" | nonce | body)[:16]`，篡改任意一位则解密抛错。
@@ -122,7 +125,7 @@ rerank 认 `results[].index` 配 `relevance_score` 或 `score`，也认顶层 `d
 | 不是认证加密（AEAD） | 完整性靠独立 HMAC，正确但非标准封装，无 associated data |
 | 没有密钥轮换与版本号 | 只能一次性重加密全部密文 |
 | 纯 Python 逐字节异或 | 无常数时间保证；无内存清零，密钥残留在 GC 里 |
-| 无硬件/系统密钥库绑定 | 文件复制到另一台机器仍然可解 |
+| 非 Windows 上无系统密钥库绑定 | 文件复制到另一台机器仍然可解（Windows 上新建的主密钥由 DPAPI 绑定当前用户） |
 
 它的定位是**防止密钥以明文出现在数据库、备份、导出包、日志和 git 里**，不是防御本机提权。
 
@@ -131,7 +134,9 @@ rerank 认 `results[].index` 配 `relevance_score` 或 `score`，也认顶层 `d
 | 情形 | 行为 |
 |---|---|
 | 未配置 / provider=none | `ModelUnavailable(role, "未配置" 或 "该角色被显式禁用")` |
-| 网络错误、超时、5xx | 重试 2 次（退避 0.5s / 1.5s），仍失败抛 `retryable=True` |
+| 网络错误、超时、5xx | 后台调用重试 2 次（退避 0.5s / 1.5s），仍失败抛 `retryable=True` |
+| 交互式调用（检索时的 embed / rerank） | `interactive()` 快速失败：只试 1 次，单次 ≤ 4 s、合计 ≤ 8 s（1.0.0 一个挂起的端点让每次搜索卡 15 s 起） |
+| 熔断 | 超时、连接错误、5xx、429 之后该角色 60 s 内视为不可用，不再发网络请求；`health()` 的 `ok`/`degraded`/`last_error` 如实反映；4xx 不触发；手动「测试连接」绕过熔断 |
 | 4xx | **不重试**，直接抛，并记录 `http_status` |
 | 端点不存在（404/405） | rerank 先试 `/v1/rerank` 再试 `/rerank`，都 404 才失败 |
 | 响应缺字段 / 向量条数不符 / 零向量 | 抛 `ModelUnavailable`，绝不补零 |

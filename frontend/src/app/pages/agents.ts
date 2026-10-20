@@ -21,20 +21,26 @@ const ECOSYSTEM_LABELS: Record<string, string> = {
   'generic-mcp': '通用 MCP',
 };
 
-interface ProbeLike extends AgentProbe {
-  match?: unknown;
+/** 探针行：后端字段是 probe（类型）/ state（found 表示命中）/ detail / found·total（历史命中）。 */
+function probeRow(probe: AgentProbe): HTMLElement {
+  const ok = probe.state === 'found';
+  const detail = String(probe.detail ?? probe.target ?? '');
+  return el('div', { class: `probe-row ${ok ? 'is-ok' : ''}`.trim() },
+    el('span', { class: `dot dot-${ok ? 'ok' : 'muted'}` }),
+    el('span', { class: 'probe-type mono' }, String(probe.probe ?? 'probe')),
+    el('span', { class: 'probe-detail', title: detail }, detail || '无输出'),
+    probe.total ? el('span', { class: 'muted-text mono', title: '历史命中 / 探测次数' }, `${probe.found ?? 0}/${probe.total}`) : null);
 }
 
-function probeRow(probe: ProbeLike): HTMLElement {
-  const detail = probe.detail ?? probe.evidence ?? probe.target ?? '';
-  return el('div', { class: `probe-row ${probe.ok ? 'is-ok' : ''}`.trim() },
-    el('span', { class: `dot dot-${probe.ok ? 'ok' : 'muted'}` }),
-    el('span', { class: 'probe-type mono' }, String(probe.type ?? 'probe')),
-    el('span', { class: 'probe-detail', title: detail }, detail || '无输出'));
+function agentName(agent: AgentStatus): string {
+  return agent.display_name ?? agent.id;
+}
+
+function isOnline(agent: AgentStatus): boolean {
+  return agent.status === 'online';
 }
 
 function configSnippet(agent: AgentStatus): string {
-  if (agent.config_snippet) return agent.config_snippet;
   const id = agent.id;
   if (agent.ecosystem === 'claude-code' || agent.ecosystem === 'claude') {
     return JSON.stringify({
@@ -56,14 +62,14 @@ function configSnippet(agent: AgentStatus): string {
   if (agent.ecosystem === 'generic-mcp') {
     return `# stdio\ncommand: python -m memora_core --data <数据目录> mcp-stdio\n# http\nendpoint: POST http://127.0.0.1:8790/mcp`;
   }
-  return `# ${agent.name ?? id}\nMCP: POST http://127.0.0.1:8790/mcp\nREST: http://127.0.0.1:8790/api/*`;
+  return `# ${agentName(agent) || id}\nMCP: POST http://127.0.0.1:8790/mcp\nREST: http://127.0.0.1:8790/api/*`;
 }
 
 function agentCard(agent: AgentStatus, onProbe: (id: string) => void): HTMLElement {
-  const online = agent.online ?? agent.status === 'online';
-  const status = agent.status ?? (online ? 'online' : 'offline');
-  const probes = (agent.probes ?? []) as ProbeLike[];
-  const node = el('article', { class: `agent-card ${online ? 'is-online' : ''}`.trim() });
+  const online = isOnline(agent);
+  const status = agent.status ?? 'offline';
+  const probes = agent.probes ?? [];
+  const node = el('article', { class: `agent-card ${online ? 'is-online' : ''}`.trim(), dataset: { agent: agent.id } });
 
   const snippet = configSnippet(agent);
   const snippetPre = el('pre', { class: 'config-snippet' }, snippet);
@@ -73,19 +79,23 @@ function agentCard(agent: AgentStatus, onProbe: (id: string) => void): HTMLEleme
       el('div', { class: 'agent-title-wrap' },
         el('span', { class: `status-led ${online ? 'is-on' : ''}`.trim() }),
         el('div', null,
-          el('h3', { class: 'agent-name' }, agent.name ?? agent.id),
+          el('h3', { class: 'agent-name' }, agentName(agent)),
           el('div', { class: 'agent-sub' },
             badge(ECOSYSTEM_LABELS[String(agent.ecosystem ?? '')] ?? String(agent.ecosystem ?? 'mcp'), 'info'),
             el('span', { class: 'mono muted-text' }, agent.id)))),
       statusBadge(status)),
     el('div', { class: 'agent-stats' },
-      el('div', { class: 'agent-stat' }, el('span', { class: 'muted-text' }, '会话'), el('strong', null, fmtNumber(agent.sessions ?? 0))),
-      el('div', { class: 'agent-stat' }, el('span', { class: 'muted-text' }, '记忆'), el('strong', null, fmtNumber(agent.memories ?? 0))),
-      el('div', { class: 'agent-stat' }, el('span', { class: 'muted-text' }, '心跳'), el('strong', null, fmtRelative(agent.heartbeat_at ?? agent.last_seen)))),
+      el('div', { class: 'agent-stat', title: `活跃 ${fmtNumber(agent.sessions?.active ?? 0)}` },
+        el('span', { class: 'muted-text' }, '会话'), el('strong', { dataset: { stat: 'sessions' } }, fmtNumber(agent.sessions?.total ?? 0))),
+      el('div', { class: 'agent-stat', title: `已批准 ${fmtNumber(agent.memories?.approved ?? 0)}` },
+        el('span', { class: 'muted-text' }, '记忆'), el('strong', { dataset: { stat: 'memories' } }, fmtNumber(agent.memories?.total ?? 0))),
+      el('div', { class: 'agent-stat', title: agent.last_heartbeat ? '最近心跳' : '最近一次被看到（探针 / 会话）' },
+        el('span', { class: 'muted-text' }, '心跳'), el('strong', null, fmtRelative(agent.last_heartbeat ?? agent.last_seen)))),
   );
 
+  const passed = probes.filter((p) => p.state === 'found').length;
   const probeSection = el('div', { class: 'agent-probes' },
-    el('div', { class: 'probe-head' }, el('span', null, '探针证据'), badge(`${probes.filter((p) => p.ok).length}/${probes.length} 通过`, probes.some((p) => p.ok) ? 'ok' : 'muted')));
+    el('div', { class: 'probe-head' }, el('span', null, '探针证据'), badge(`${passed}/${probes.length} 命中`, passed ? 'ok' : 'muted')));
   if (probes.length) {
     for (const probe of probes) probeSection.appendChild(probeRow(probe));
   } else {
@@ -135,7 +145,7 @@ export const agentsPage: PageModule = {
 
     async function probeOne(id: string): Promise<void> {
       try {
-        await api.probeAgents();
+        await api.probeAgents(id === 'all' ? undefined : [id]);
         toast('探测完成', 'ok');
         await load();
       } catch (error) {
@@ -178,11 +188,11 @@ export const agentsPage: PageModule = {
         ));
         return;
       }
-      const online = agents.filter((a) => a.online ?? a.status === 'online');
+      const online = agents.filter(isOnline);
       const summary = el('div', { class: 'agent-summary' },
         badge(`${online.length} / ${agents.length} 在线`, online.length ? 'ok' : 'muted'),
-        el('span', { class: 'muted-text' }, `总会话 ${fmtNumber(agents.reduce((acc, a) => acc + Number(a.sessions ?? 0), 0))}`),
-        el('span', { class: 'muted-text' }, `总记忆 ${fmtNumber(agents.reduce((acc, a) => acc + Number(a.memories ?? 0), 0))}`));
+        el('span', { class: 'muted-text' }, `总会话 ${fmtNumber(agents.reduce((acc, a) => acc + Number(a.sessions?.total ?? 0), 0))}`),
+        el('span', { class: 'muted-text' }, `总记忆 ${fmtNumber(agents.reduce((acc, a) => acc + Number(a.memories?.total ?? 0), 0))}`));
 
       const cards = agents.map((agent) => agentCard(agent, (id) => void probeOne(id)));
       grid.replaceChildren(summary, ...cards);

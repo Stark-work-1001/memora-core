@@ -7,9 +7,9 @@
  */
 
 import type {
-  AgentStatus, Algorithm, Conflict, Dict, DocumentDetail, DocumentRow, GraphData, Health,
-  Job, Memory, MemoryListQuery, ModelCall, ModelProfile, ModelRole, ModelTestResult,
-  Overview, Paged, RunDetail, RunSummary, SearchResult, ServerEvent, Settings, WorkflowTemplate,
+  AgentConfig, AgentStatus, Algorithm, Conflict, Dict, DocumentDetail, DocumentRow, GraphData, Health,
+  Job, Memory, MemoryListQuery, ModelCall, ModelProfile, ModelRole, ModelsState, ModelTestResult,
+  Overview, Paged, ReviewResult, RunDetail, RunSummary, SearchResult, ServerEvent, Settings, WorkflowTemplate,
 } from './types';
 
 /** 默认超时：普通 GET。 */
@@ -18,6 +18,10 @@ const TIMEOUT_READ = 12000;
 const TIMEOUT_WRITE = 30000;
 /** 后端探活单独给一个短超时，用于快速失败展示"无法连接后端"。 */
 const TIMEOUT_PING = 3500;
+/** 原始文档读取（可能是大文件）。 */
+const TIMEOUT_RAW = 30000;
+/** 文件上传（multipart，含切块入库）。 */
+const TIMEOUT_UPLOAD = 120000;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -161,6 +165,38 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 }
 
+/**
+ * 不走 JSON 的请求（原始文档 / multipart 上传）也必须有超时：
+ * 计时覆盖「发请求 → 读完响应体」全过程，超时与断连都归一成 ApiError。
+ */
+async function fetchWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal, credentials: 'same-origin' });
+    return await read(response);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    if (controller.signal.aborted) {
+      throw new ApiError(`请求超时（${(timeoutMs / 1000).toFixed(0)} 秒）：${label}`, 0, 'timeout');
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ApiError(`无法连接后端：${reason}`, 0, 'network', error);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function asObject(value: unknown): Dict {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Dict : {};
+}
+
 /* ---------------------------------------------------------------- 列表归一化 */
 
 function toArray<T>(value: unknown): T[] {
@@ -210,6 +246,7 @@ export const api = {
         status: query.status,
         agent: query.agent,
         sort: query.sort,
+        order: query.order,
         limit: query.limit,
         offset: query.offset,
         include_candidates: query.include_candidates,
@@ -232,8 +269,8 @@ export const api = {
       query: hard ? { hard: 1 } : undefined,
     });
   },
-  reviewMemory(id: string, grade: number, note?: string): Promise<Memory> {
-    return request<Memory>(`/memories/${encodeURIComponent(id)}/review`, {
+  reviewMemory(id: string, grade: number, note?: string): Promise<ReviewResult> {
+    return request<ReviewResult>(`/memories/${encodeURIComponent(id)}/review`, {
       method: 'POST',
       body: { grade, note },
     });
@@ -275,15 +312,18 @@ export const api = {
   document(id: string): Promise<DocumentDetail> {
     return request<DocumentDetail>(`/documents/${encodeURIComponent(id)}`);
   },
-  async documentRaw(id: string): Promise<string> {
-    const response = await fetch(`/api/documents/${encodeURIComponent(id)}/raw`, {
+  documentRaw(id: string): Promise<string> {
+    return fetchWithTimeout(`/api/documents/${encodeURIComponent(id)}/raw`, {
       headers: { Accept: 'text/markdown, text/plain' },
       cache: 'no-store',
+    }, TIMEOUT_RAW, '读取原始文档', async (response) => {
+      if (!response.ok) {
+        const body = await readBody(response);
+        const parsed = messageFromBody(body, `读取原始文档失败（HTTP ${response.status}）`);
+        throw new ApiError(parsed.message, response.status, parsed.code, body);
+      }
+      return await response.text();
     });
-    if (!response.ok) {
-      throw new ApiError(`读取原始文档失败（HTTP ${response.status}）`, response.status, 'server');
-    }
-    return await response.text();
   },
   importDocument(payload: { path: string; scope?: string }): Promise<Dict> {
     return request<Dict>('/documents/import', { method: 'POST', body: payload, timeoutMs: 60000 });
@@ -292,13 +332,15 @@ export const api = {
     const form = new FormData();
     form.append('file', file, file.name);
     if (scope) form.append('scope', scope);
-    const response = await fetch('/api/documents/import', { method: 'POST', body: form });
-    const body = await readBody(response);
-    if (!response.ok) {
-      const parsed = messageFromBody(body, `上传失败（HTTP ${response.status}）`);
-      throw new ApiError(parsed.message, response.status, parsed.code, body);
-    }
-    return body as Dict;
+    return fetchWithTimeout('/api/documents/import', { method: 'POST', body: form }, TIMEOUT_UPLOAD,
+      `上传 ${file.name}`, async (response) => {
+        const body = await readBody(response);
+        if (!response.ok) {
+          const parsed = messageFromBody(body, `上传失败（HTTP ${response.status}）`);
+          throw new ApiError(parsed.message, response.status, parsed.code, body);
+        }
+        return body as Dict;
+      });
   },
   reindexDocument(id: string): Promise<Dict> {
     return request<Dict>(`/documents/${encodeURIComponent(id)}/reindex`, {
@@ -336,24 +378,19 @@ export const api = {
     return request<RunDetail>(`/runs/${encodeURIComponent(id)}`);
   },
 
-  /* 模型 */
-  async models(): Promise<ModelProfile[]> {
-    const raw = await request<unknown>('/models');
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const record = raw as Dict;
-      if (record.profiles) return toArray<ModelProfile>(record.profiles);
-      const roles = record.roles;
-      if (roles && typeof roles === 'object' && !Array.isArray(roles)) {
-        // roles 可能是 {chat: {...}, embedding: {...}}
-        const list: ModelProfile[] = [];
-        for (const role of Object.keys(roles as Dict)) {
-          const value = (roles as Dict)[role];
-          if (value && typeof value === 'object') list.push({ role, ...(value as Dict) } as ModelProfile);
-        }
-        if (list.length) return list;
-      }
-    }
-    return toArray<ModelProfile>(raw);
+  /* 模型：GET /api/models → { roles, by_role, profiles, health, degraded, … } */
+  async models(): Promise<ModelsState> {
+    const record = asObject(await request<unknown>('/models'));
+    const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
+    return {
+      roles: asObject(record.roles) as ModelsState['roles'],
+      by_role: asObject(record.by_role) as ModelsState['by_role'],
+      profiles: toArray<ModelProfile>(record.profiles),
+      health: asObject(record.health) as ModelsState['health'],
+      degraded: strings(record.degraded),
+      unavailable: strings(record.unavailable),
+      note: typeof record.note === 'string' ? record.note : undefined,
+    };
   },
   saveModel(role: ModelRole | string, profile: Dict): Promise<ModelProfile> {
     return request<ModelProfile>('/models', { method: 'POST', body: { role, ...profile } });
@@ -381,14 +418,22 @@ export const api = {
     const raw = await request<unknown>('/agents');
     return toArray<AgentStatus>(raw);
   },
-  async probeAgents(): Promise<AgentStatus[]> {
-    const raw = await request<unknown>('/agents/probe', { method: 'POST', body: {}, timeoutMs: 30000 });
-    return toArray<AgentStatus>(raw);
+  /** 探测；ids 为空时探测全部。返回 probe_all 的 results（每条一个探针结果）。 */
+  async probeAgents(ids?: string[]): Promise<Dict[]> {
+    const raw = await request<unknown>('/agents/probe', {
+      method: 'POST',
+      body: ids && ids.length ? { agents: ids } : {},
+      timeoutMs: 30000,
+    });
+    return toArray<Dict>(raw);
+  },
+  agentConfig(id: string): Promise<AgentConfig> {
+    return request<AgentConfig>(`/agents/${encodeURIComponent(id)}/config`);
   },
 
   /* 冲突与任务 */
-  async conflicts(): Promise<Conflict[]> {
-    const raw = await request<unknown>('/conflicts');
+  async conflicts(status?: string): Promise<Conflict[]> {
+    const raw = await request<unknown>('/conflicts', { query: { status, limit: 200 } });
     return toArray<Conflict>(raw);
   },
   resolveConflict(id: string, resolution: string): Promise<Dict> {
@@ -416,12 +461,26 @@ export const api = {
     const query = params.toString();
     return `/api/exchange/export${query ? `?${query}` : ''}`;
   },
+  /** 发 {jsonl}。1.0.0 的后端不认 {text}（整个请求体被当成一条记录导入）；1.1.0 起两种都认。 */
   async exchangeImport(text: string, scope = 'global'): Promise<Dict> {
     return request<Dict>('/exchange/import', {
       method: 'POST',
-      body: { text, scope },
+      body: { jsonl: text, scope },
       timeoutMs: 60000,
     });
+  },
+
+  /* 工作流异步运行与取消（engine 1.1.0）：POST 立即返回 202 + run（queued|running），进度靠
+     SSE run 事件 + 轮询 run(id)；取消返回 200（已收尾）/ 202（已请求，执行器收尾中）/ 409（已结束）。 */
+  runWorkflowAsync(id: string, inputs: Dict, scope = 'global'): Promise<RunDetail> {
+    return request<RunDetail>(`/workflows/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      query: { async: 1 },
+      body: { inputs, scope, async: true },
+    });
+  },
+  cancelRun(id: string): Promise<RunDetail> {
+    return request<RunDetail>(`/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   },
 };
 
@@ -475,7 +534,8 @@ export class EventStream {
     this.source.onmessage = (ev: MessageEvent<string>) => {
       this.dispatch(ev.data, 'message');
     };
-    for (const type of ['run', 'memory', 'agent', 'log']) {
+    // 与 events.EVENT_TYPES 一致：heartbeat / system 也要接住，否则连接状态与降级广播都收不到。
+    for (const type of ['run', 'memory', 'agent', 'log', 'heartbeat', 'system']) {
       this.source.addEventListener(type, (ev: Event) => {
         const message = ev as MessageEvent<string>;
         this.dispatch(message.data, type);
@@ -494,7 +554,8 @@ export class EventStream {
     const record = (payload && typeof payload === 'object' ? payload : {}) as Dict;
     const type = typeof record.type === 'string' ? record.type : fallbackType;
     const data = (record.data && typeof record.data === 'object' ? record.data : record) as Dict;
-    this.onEvent({ type, data, ts: typeof record.ts === 'string' ? record.ts : undefined });
+    const ts = typeof record.ts === 'number' || typeof record.ts === 'string' ? record.ts : undefined;
+    this.onEvent({ type, data, ts });
   }
 
   private scheduleReconnect(): void {

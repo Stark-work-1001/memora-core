@@ -1,6 +1,7 @@
 /**
- * 脑图入口：iframe 嵌入 /brain.html?view=<view>，并提供视图切换
- * （语义 / 层级 / 时间线 / 证据）与独立打开。
+ * 脑图入口：iframe 嵌入 /brain.html?view=<view>&focus=<id>，并提供视图切换
+ * （语义 / 层级 / 时间线 / 证据）与独立打开。brain.js 读取这两个参数
+ * （brain/main.ts readLaunchParams），服务端对同源 iframe 放行（frame-ancestors 'self'）。
  */
 
 import { el } from '../dom';
@@ -45,9 +46,14 @@ export const graphPage: PageModule = {
           title: item.hint,
           onClick: () => {
             view = item.value;
+            // 把视图写回地址栏（不触发 hashchange 重渲染），刷新 / 分享链接时保持当前视图
+            const params = new URLSearchParams({ view });
+            if (focus) params.set('focus', focus);
+            history.replaceState(null, '', `#/graph?${params.toString()}`);
             renderChips();
             mountFrame();
           },
+          'aria-pressed': view === item.value ? 'true' : 'false',
         }, item.label)),
         el('span', { class: 'muted-text' }, VIEWS.find((v) => v.value === view)?.hint ?? ''),
       );
@@ -72,7 +78,7 @@ export const graphPage: PageModule = {
         if (settled) return;
         overlay.replaceChildren(emptyState(
           '脑图加载失败',
-          'brain.js 由 T8 负责构建；若产物缺失，此处的 iframe 会是空白。',
+          '没有取到 brain.html / brain.js；请确认前端已构建（cd frontend && npm run build）。',
         ));
       });
       // 兜底：iframe 已同源加载完成但 load 事件因缓存未触发时不至于一直显示遮罩

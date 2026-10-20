@@ -4,8 +4,8 @@
  */
 
 import { el, clear, debounce, icon } from '../dom';
-import { api, errorMessage, isConnectionIssue } from '../api';
-import type { Evidence, MemBlock, Memory, MemoryEdge, MemoryListQuery, Paged } from '../types';
+import { api, ApiError, errorMessage, isConnectionIssue } from '../api';
+import type { Didactic, Evidence, MemBlock, Memory, MemoryEdge, MemoryListQuery, Paged } from '../types';
 import { KIND_LABELS, STATUS_LABELS } from '../types';
 import { mathBlock, renderMarkdownInto, plainText } from '../markdown';
 import {
@@ -16,6 +16,22 @@ import type { PageContext, PageModule } from './contract';
 
 const ITEM_HEIGHT = 78;
 const PAGE_SIZE = 100;
+
+/** 排序选项 → store.SORTS 的 sort + order（1.0.0 发的 created_desc 等值后端不认，全部退回 updated_at）。 */
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: 'recorded_at:desc', label: '最新入库' },
+  { value: 'recorded_at:asc', label: '最早入库' },
+  { value: 'updated_at:desc', label: '最近更新' },
+  { value: 'trust:desc', label: '信任度' },
+  { value: 'importance:desc', label: '重要度' },
+  { value: 'review_due:asc', label: '复习到期' },
+];
+
+function applySort(query: MemoryListQuery, value: string): void {
+  const [sort, order] = value.split(':');
+  query.sort = sort;
+  query.order = order === 'asc' ? 'asc' : 'desc';
+}
 
 /* ---------------------------------------------------------------- 虚拟列表 */
 
@@ -129,16 +145,21 @@ export const memoriesPage: PageModule = {
       kind: ctx.params.get('kind') ?? '',
       status: ctx.params.get('status') ?? '',
       scope: ctx.params.get('scope') ?? '',
-      sort: ctx.params.get('sort') ?? 'created_desc',
       limit: PAGE_SIZE,
       offset: 0,
     };
+    const initialSort = SORT_OPTIONS.some((item) => item.value === ctx.params.get('sort'))
+      ? String(ctx.params.get('sort'))
+      : 'recorded_at:desc';
+    applySort(query, initialSort);
 
     let all: Memory[] = [];
     let total = 0;
     let loading = false;
     let selectedId: string | null = ctx.params.get('id');
     let disposed = false;
+    /** 最近一次复习返回的 ease（memory 行本身不存 ease）。 */
+    const lastEase = new Map<string, number | undefined>();
 
     const page = el('div', { class: 'page page-memories' });
     const split = el('div', { class: 'split' });
@@ -164,24 +185,19 @@ export const memoriesPage: PageModule = {
     const kindSelect = select({
       items: [
         { value: '', label: '全部类型' },
-        ...Object.keys(KIND_LABELS).map((key) => ({ value: key, label: KIND_LABELS[key] })),
-        { value: 'other', label: '其它' },
+        ...Object.keys(KIND_LABELS).map((key) => ({ value: key, label: `${KIND_LABELS[key]} · ${key}` })),
       ],
       value: query.kind,
       onChange: (value) => {
-        query.kind = value === 'other' ? '' : value;
+        query.kind = value;
         void reload();
       },
     });
 
     const statusSelect = select({
       items: [
-        { value: '', label: '全部状态' },
-        { value: 'candidate', label: '待审' },
-        { value: 'approved', label: '已批准' },
-        { value: 'rejected', label: '已拒绝' },
-        { value: 'superseded', label: '被取代' },
-        { value: 'archived', label: '已归档' },
+        { value: '', label: '全部状态（不含归档）' },
+        ...Object.keys(STATUS_LABELS).map((key) => ({ value: key, label: STATUS_LABELS[key] })),
       ],
       value: query.status,
       onChange: (value) => {
@@ -200,17 +216,10 @@ export const memoriesPage: PageModule = {
     });
 
     const sortSelect = select({
-      items: [
-        { value: 'created_desc', label: '最新创建' },
-        { value: 'created_asc', label: '最早创建' },
-        { value: 'updated_desc', label: '最近更新' },
-        { value: 'trust_desc', label: '信任度' },
-        { value: 'title_asc', label: '标题' },
-        { value: 'due_asc', label: '复习到期' },
-      ],
-      value: query.sort,
+      items: SORT_OPTIONS,
+      value: initialSort,
       onChange: (value) => {
-        query.sort = value;
+        applySort(query, value);
         void reload();
       },
     });
@@ -261,7 +270,7 @@ export const memoriesPage: PageModule = {
           memory.scope_id ? el('span', { class: 'muted-text mono' }, memory.scope_id) : null),
         el('div', { class: 'memo-item-snippet' }, snippet || '（正文为空）'),
         el('div', { class: 'memo-item-foot' },
-          el('span', { class: 'muted-text' }, fmtRelative(memory.created_at ?? memory.updated_at)),
+          el('span', { class: 'muted-text' }, fmtRelative(memory.recorded_at ?? memory.updated_at)),
           memory.review_count ? el('span', { class: 'muted-text' }, `复习 ${memory.review_count} 次`) : null));
       return node;
     }
@@ -281,12 +290,13 @@ export const memoriesPage: PageModule = {
         total = result.total;
         vlist.setItems(all);
         listMeta.textContent = `${fmtNumber(all.length)} / ${fmtNumber(total)} 条`;
-        if (!all.length) {
+        if (!all.length && !selectedId) {
           renderEmptyDetail();
-        } else if (!selectedId || !all.some((m) => m.id === selectedId)) {
+        } else if (!selectedId) {
           void selectMemory(all[0].id);
         } else {
-          void selectMemory(selectedId);
+          // 深链（#/memories?id=…）指向的记忆不一定在当前这一页：直接按 id 取；取不到再退回第一条
+          void selectMemory(selectedId, all[0]?.id);
         }
       } catch (error) {
         if (disposed) return;
@@ -339,7 +349,7 @@ export const memoriesPage: PageModule = {
         skeleton(2), skeleton(5), skeleton(3)));
     }
 
-    async function selectMemory(id: string): Promise<void> {
+    async function selectMemory(id: string, fallbackId?: string): Promise<void> {
       selectedId = id;
       for (const node of Array.from(vlist.root.querySelectorAll<HTMLElement>('.memo-item'))) {
         node.classList.toggle('is-active', node.dataset.id === id);
@@ -351,6 +361,11 @@ export const memoriesPage: PageModule = {
         renderDetail(memory);
       } catch (error) {
         if (disposed) return;
+        if (fallbackId && fallbackId !== id && error instanceof ApiError && error.status === 404) {
+          toast(`记忆不存在：${id}`, 'warn');
+          void selectMemory(fallbackId);
+          return;
+        }
         right.replaceChildren(errorState({
           error,
           title: '记忆详情加载失败',
@@ -376,13 +391,21 @@ export const memoriesPage: PageModule = {
           memory.agent_id ? badge(`来源 ${memory.agent_id}`, 'muted') : null,
           el('span', { class: 'mono muted-text' }, memory.id)),
         el('div', { class: 'detail-meta-row' },
-          el('span', null, `创建 ${fmtDateTime(memory.created_at)}`),
-          el('span', null, `更新 ${fmtDateTime(memory.updated_at ?? memory.created_at)}`),
+          el('span', null, `入库 ${fmtDateTime(memory.recorded_at)}`),
+          el('span', null, `更新 ${fmtDateTime(memory.updated_at ?? memory.recorded_at)}`),
           memory.review_count ? el('span', null, `复习 ${memory.review_count} 次`) : null,
-          memory.due_at ? el('span', null, `下次复习 ${fmtDateTime(memory.due_at)}`) : null));
+          memory.review_due ? el('span', null, `下次复习 ${fmtDateTime(memory.review_due)}`) : null));
 
+      // 状态机（store.STATUS_TRANSITIONS）：只有 draft / candidate 能批准或拒绝，rejected 能重新进候选
+      const status = String(memory.status ?? '');
+      const reviewable = status === 'draft' || status === 'candidate';
       const actions = el('div', { class: 'detail-actions' });
-      const approveBtn = button('批准', { kind: 'primary', iconName: 'check' });
+      const approveBtn = button('批准', {
+        kind: 'primary',
+        iconName: 'check',
+        disabled: !reviewable,
+        title: reviewable ? undefined : `当前状态 ${STATUS_LABELS[status] ?? status}，不能批准`,
+      });
       approveBtn.addEventListener('click', async () => {
         const done = busy(approveBtn);
         try {
@@ -396,7 +419,11 @@ export const memoriesPage: PageModule = {
           done();
         }
       });
-      const rejectBtn = button('拒绝', { kind: 'danger' });
+      const rejectBtn = button('拒绝', {
+        kind: 'danger',
+        disabled: !reviewable,
+        title: reviewable ? undefined : `当前状态 ${STATUS_LABELS[status] ?? status}，不能拒绝`,
+      });
       rejectBtn.addEventListener('click', async () => {
         const done = busy(rejectBtn);
         try {
@@ -466,9 +493,11 @@ export const memoriesPage: PageModule = {
           onClick: async () => {
             const done = busy(btn);
             try {
-              const updated = await api.reviewMemory(memory.id, grade);
-              toast(`已记录评分 ${grade}`, 'ok');
-              renderDetail({ ...memory, ...updated });
+              const result = await api.reviewMemory(memory.id, grade);
+              lastEase.set(memory.id, result.ease);
+              toast(`已记录评分 ${grade}，下次复习 ${fmtDateTime(result.due)}`, 'ok');
+              // 返回的是复习结果而不是记忆：重新取一次详情
+              void selectMemory(memory.id);
             } catch (error) {
               toast(errorMessage(error), 'danger');
             } finally {
@@ -480,9 +509,12 @@ export const memoriesPage: PageModule = {
       }
       reviewCard.appendChild(reviewRow);
       reviewCard.appendChild(el('div', { class: 'review-stats' },
-        el('span', null, `ease=${memory.ease ?? '—'}`),
-        el('span', null, `interval=${memory.interval_days ?? '—'} 天`),
-        el('span', null, `due=${memory.due_at ? fmtDateTime(memory.due_at) : '—'}`)));
+        el('span', null, `ease=${lastEase.get(memory.id) ?? '—'}`),
+        el('span', null, `interval=${memory.stability ?? '—'} 天`),
+        el('span', null, `difficulty=${memory.difficulty ?? '—'}`),
+        el('span', null, `due=${memory.review_due ? fmtDateTime(memory.review_due) : '—'}`)));
+
+      const didactic = didacticCard(memory.didactic);
 
       const edgesCard = card({
         title: '关系',
@@ -501,7 +533,7 @@ export const memoriesPage: PageModule = {
       metaCard.appendChild(jsonBlock(memory, '查看完整 JSON'));
 
       const inner = el('div', { class: 'detail-inner' },
-        head, actions, bodyCard,
+        head, actions, bodyCard, didactic,
         el('div', { class: 'grid grid-2 align-start' }, evidenceCard, el('div', { class: 'stack' }, blocksCard, reviewCard)),
         edgesCard, metaCard);
 
@@ -513,20 +545,46 @@ export const memoriesPage: PageModule = {
       return el('div', { class: 'evidence-row' },
         el('div', { class: 'evidence-head' },
           badge(String(item.kind ?? 'unknown'), 'info'),
-          badge(`权重 ${fmtPercent(trust)}`, trustTone(trust)),
-          item.source ? el('span', { class: 'mono muted-text' }, item.source) : null,
+          badge(`信任 ${fmtPercent(trust)}`, trustTone(trust)),
+          item.verified ? badge(`已核验${item.verifier ? ` · ${item.verifier}` : ''}`, 'ok') : null,
+          item.document_id ? el('span', { class: 'mono muted-text' }, item.document_id) : null,
           el('span', { class: 'muted-text', style: { marginLeft: 'auto' } }, fmtRelative(item.created_at))),
         item.quote ? el('blockquote', { class: 'evidence-quote' }, item.quote) : null,
-        item.uri ? el('div', { class: 'evidence-uri mono' }, item.uri) : null);
+        item.uri ? el('div', { class: 'evidence-uri mono' }, item.uri) : null,
+        item.note ? el('div', { class: 'muted-text' }, item.note) : null);
     }
 
+    /** 学习型记忆的六层讲解（definition / formula / property / example …）。 */
+    function didacticCard(didactic: Didactic | null | undefined): HTMLElement | null {
+      if (!didactic || typeof didactic !== 'object') return null;
+      const labels: Record<string, string> = { definition: '定义', formula: '公式', property: '性质', example: '例子' };
+      const keys = Object.keys(didactic).filter((key) => typeof didactic[key] === 'string' && String(didactic[key]).trim());
+      if (!keys.length) return null;
+      const box = card({ title: '讲解', subtitle: keys.map((key) => labels[key] ?? key).join(' · ') });
+      for (const key of keys) {
+        const value = String(didactic[key]);
+        const row = el('div', { class: 'didactic-row', dataset: { part: key } },
+          el('div', { class: 'didactic-label muted-text' }, labels[key] ?? key));
+        if (key === 'formula') row.appendChild(mathBlock(value));
+        else {
+          const target = el('div', { class: 'markdown-body' });
+          renderMarkdownInto(target, value, { math: true });
+          row.appendChild(target);
+        }
+        box.appendChild(row);
+      }
+      return box;
+    }
+
+    /** store.block 行：类型字段是 type，另有 caption。 */
     function blockView(block: MemBlock): HTMLElement {
-      const content = block.content ?? block.text ?? '';
-      const kind = String(block.kind ?? 'text');
+      const content = block.content ?? '';
+      const kind = String(block.type ?? 'text');
       const box = el('div', { class: 'block-view' });
       box.appendChild(el('div', { class: 'block-head' },
         badge(kind, kind === 'formula' ? 'accent' : 'muted'),
-        block.lang ? badge(block.lang, 'muted') : null));
+        block.lang ? badge(block.lang, 'muted') : null,
+        block.caption ? el('span', { class: 'muted-text' }, block.caption) : null));
       if (kind === 'formula' || kind === 'math') {
         box.appendChild(mathBlock(content));
       } else if (kind === 'code') {

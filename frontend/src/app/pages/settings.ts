@@ -1,41 +1,24 @@
 /**
- * 设置：数据目录、端口、自动备份、吸收策略、离线降级开关、
- * 导出 / 导入（jsonl）、重启后端提示。
+ * 设置：运行参数（只读，来自 /api/settings 的 runtime）、已保存的设置项、导出 / 导入（jsonl）。
+ *
+ * 1.0.0 在这里放了「数据目录 / 端口 / 自动备份 / 吸收策略 / 离线降级开关」的可编辑表单，
+ * 但 GET /api/settings 返回的是 {values, runtime}（表单读不到任何值），后端也没有任何代码读取这些键，
+ * 数据目录与端口由启动参数决定——点「保存」提示成功，实际什么都没发生。
+ * 按降级契约（不为没发生的事返回成功），改为如实展示。
  */
 
 import { el } from '../dom';
 import { api, errorMessage } from '../api';
 import type { Settings } from '../types';
 import {
-  badge, button, busy, card, checkbox, errorState,
-  numberInput, sectionTitle, select, skeleton, textInput, toast,
+  badge, button, busy, card, errorState, skeleton, toast,
 } from './ui';
 import type { PageModule } from './contract';
 
-const ABSORB_STRATEGIES = [
-  { value: 'candidate', label: '候选：全部先进候选队列，人工审核' },
-  { value: 'auto-approved', label: '自动批准：来源可信时直接 approved' },
-  { value: 'readonly', label: '只读：只建索引，不产生记忆' },
-];
-
-interface FormState {
-  data_dir: string;
-  port: number;
-  auto_backup: boolean;
-  backup_interval_h: number;
-  absorb_strategy: string;
-  offline_fallback: boolean;
-}
-
-function readSettings(raw: Settings): FormState {
-  return {
-    data_dir: String(raw.data_dir ?? raw.vault_dir ?? ''),
-    port: Number(raw.port ?? 8790),
-    auto_backup: Boolean(raw.auto_backup ?? true),
-    backup_interval_h: Number(raw.backup_interval_h ?? 24),
-    absorb_strategy: String(raw.absorb_strategy ?? 'candidate'),
-    offline_fallback: Boolean(raw.offline_fallback ?? raw.offline_mode ?? true),
-  };
+function kv(label: string, value: string, key: string): HTMLElement {
+  return el('div', { class: 'kv-row', dataset: { setting: key } },
+    el('span', { class: 'kv-key muted-text' }, label),
+    el('span', { class: 'kv-value mono' }, value || '—'));
 }
 
 export const settingsPage: PageModule = {
@@ -43,18 +26,11 @@ export const settingsPage: PageModule = {
   title: '设置',
   icon: 'settings',
   group: 'system',
-  shortcut: 'g s',
+  // 与 main.ts 的 SHORTCUTS 一致（g s 是检索页）
+  shortcut: 'g ,',
   render(ctx) {
     let disposed = false;
-    let form: FormState = {
-      data_dir: '',
-      port: 8790,
-      auto_backup: true,
-      backup_interval_h: 24,
-      absorb_strategy: 'candidate',
-      offline_fallback: true,
-    };
-    let lastSavedAt = '';
+    let settings: Settings = {};
 
     const page = el('div', { class: 'page page-settings' });
     ctx.mount.appendChild(page);
@@ -65,90 +41,46 @@ export const settingsPage: PageModule = {
         el('div', { class: 'page-head-left' },
           el('h1', { class: 'page-title' }, '设置'),
           el('div', { class: 'page-head-meta' },
-            el('span', { class: 'muted-text' }, '修改后部分项需要重启后端才生效'))),
+            el('span', { class: 'muted-text' }, '运行参数只读；导出 / 导入走 memora-exchange/1'))),
         el('div', { class: 'page-head-actions' },
           button('重新加载', { iconName: 'refresh', kind: 'subtle', onClick: () => void load() }))),
       body,
     );
 
     function renderForm(): void {
-      const dirInput = textInput({ value: form.data_dir, placeholder: 'D:\\memora-data' });
-      const portInput = numberInput({ value: form.port, min: 1024, max: 65535 });
-      const backupToggle = checkbox('启用自动备份', {
-        checked: form.auto_backup,
-        onChange: (v) => { form.auto_backup = v; },
-      });
-      const intervalInput = numberInput({ value: form.backup_interval_h, min: 1, max: 720 });
-      const absorbSelect = select({
-        items: ABSORB_STRATEGIES,
-        value: form.absorb_strategy,
-        onChange: (v) => { form.absorb_strategy = v; },
-      });
-      const offlineToggle = checkbox('云端不可用时使用本地确定性降级', {
-        checked: form.offline_fallback,
-        onChange: (v) => { form.offline_fallback = v; },
-      });
+      const runtime = settings.runtime ?? {};
+      const values = settings.values ?? {};
 
-      const saveBtn = button('保存设置', { kind: 'primary' });
-      saveBtn.addEventListener('click', async () => {
-        const done = busy(saveBtn);
-        try {
-          form.data_dir = dirInput.value.trim();
-          form.port = Number(portInput.value) || 8790;
-          form.backup_interval_h = Number(intervalInput.value) || 24;
-          const saved = await api.saveSettings({ ...form });
-          lastSavedAt = new Date().toLocaleTimeString('zh-CN');
-          toast(saved ? '设置已保存' : '设置已提交', 'ok');
-          if (saved && typeof saved === 'object') form = readSettings(saved);
-        } catch (error) {
-          toast(errorMessage(error), 'danger');
-        } finally {
-          done();
-        }
-      });
-
-      const storageCard = card({
-        title: '存储与网络',
-        subtitle: 'SQLite 真源 + Markdown 镜像；仅监听回环地址',
-        actions: [saveBtn],
+      const runtimeCard = card({
+        title: '运行参数',
+        subtitle: '本进程实际使用的值（只读）；SQLite 真源 + Markdown 镜像，仅监听回环地址',
         body: [
-          el('div', { class: 'form-grid' },
-            el('label', { class: 'field field-wide' },
-              el('span', { class: 'field-label' }, '数据目录'),
-              dirInput,
-              el('span', { class: 'field-hint' }, '存放 memora.db / vault / backups / logs；修改需重启后端')),
-            el('label', { class: 'field' },
-              el('span', { class: 'field-label' }, '端口'),
-              portInput,
-              el('span', { class: 'field-hint' }, '默认 8790，仅本机可访问'))),
+          kv('版本', String(runtime.version ?? ''), 'version'),
+          kv('数据目录', String(runtime.data_dir ?? ''), 'data_dir'),
+          kv('监听地址', runtime.host ? `${runtime.host}:${runtime.port ?? ''}` : '', 'listen'),
           el('div', { class: 'restart-note' },
-            badge('需重启', 'warn'),
-            el('span', null, '数据目录与端口修改后需要重启后端进程：python -m memora_core serve')),
+            badge('启动参数', 'info'),
+            el('span', null, '数据目录与端口由启动参数决定：python -m memora_core --data <目录> serve --port <端口>，改动需重启后端。')),
         ],
       });
 
-      const backupCard = card({
-        title: '备份与吸收',
-        subtitle: '自动备份会写入 backups/，保留最近 N 份',
+      const policyCard = card({
+        title: '降级策略',
+        subtitle: '固定契约，不提供开关',
         body: [
-          el('div', { class: 'form-row' }, backupToggle),
-          el('label', { class: 'field' },
-            el('span', { class: 'field-label' }, '备份间隔（小时）'),
-            intervalInput),
-          sectionTitle('吸收策略', '文档导入后如何产生记忆'),
-          absorbSelect,
-          el('div', { class: 'field-hint' }, '候选模式下所有导入先进候选队列，必须人工或第二条证据后才能批准。'),
-        ],
-      });
-
-      const offlineCard = card({
-        title: '降级与离线',
-        subtitle: '无云凭据时必须确定性地工作，并在界面如实标注',
-        body: [
-          el('div', { class: 'form-row' }, offlineToggle),
           el('p', { class: 'muted-text' },
-            '关闭后，模型不可用时相关节点会直接失败（run 标记 failed），不再走确定性兜底实现。'),
+            '云端模型未配置或不可用时，检索 / 判定 / 向量等能力回落到本地确定性算法（BM25、字符哈希向量、规则判定），'
+            + '并在界面与 API 的 degraded 字段如实标注；不会伪造模型输出。模型档位在「模型」页配置。'),
         ],
+      });
+
+      const keys = Object.keys(values).sort();
+      const storedCard = card({
+        title: '已保存的设置项',
+        subtitle: keys.length ? `${keys.length} 项（setting 表原样）` : 'setting 表为空',
+        body: keys.length
+          ? keys.map((key) => kv(key, JSON.stringify(values[key]), key))
+          : [el('p', { class: 'muted-text' }, '当前版本的后端不从 setting 表读取任何开关，这里只做如实展示。')],
       });
 
       const exportBtn = button('导出 jsonl', { kind: 'primary', iconName: 'upload' });
@@ -207,14 +139,9 @@ export const settingsPage: PageModule = {
         body: [importArea, el('div', { class: 'form-row' }, importBtn)],
       });
 
-      const savedNote = lastSavedAt
-        ? el('div', { class: 'muted-text' }, `最近保存：${lastSavedAt}`)
-        : null;
-
       body.replaceChildren(
-        el('div', { class: 'grid grid-2 align-start' }, storageCard, el('div', { class: 'stack' }, backupCard, offlineCard)),
+        el('div', { class: 'grid grid-2 align-start' }, runtimeCard, el('div', { class: 'stack' }, policyCard, storedCard)),
         exchangeCard,
-        savedNote ?? el('div'),
       );
     }
 
@@ -223,7 +150,7 @@ export const settingsPage: PageModule = {
       try {
         const raw = await api.settings();
         if (disposed) return;
-        form = readSettings(raw ?? {});
+        settings = raw ?? {};
         renderForm();
         ctx.setStatus('设置已加载');
       } catch (error) {

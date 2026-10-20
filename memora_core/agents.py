@@ -745,8 +745,13 @@ def register_session(store, agent_id: str, external_id: str, title: str = "", cw
     return item
 
 
-def end_session(store, agent_id: str, external_id: str, turns=None) -> dict:
-    """结束会话；turns 作为会话明细存档，并尝试触发会话沉淀工作流。"""
+def end_session(store, agent_id: str, external_id: str, turns=None, gw=None) -> dict:
+    """结束会话；turns 作为会话明细存档，并尝试触发会话沉淀工作流。
+
+    gw：调用方（MCP / HTTP 运行时）手里的模型网关；没给时按本库配置现建一个 ModelGateway。
+    1.0.0 这里永远传 gw=None，配置了模型也只走规则抽取。没有可用档位时工作流引擎会把它
+    当作「无网关」，如实降级（run.degraded 写明）。
+    """
     aid = (agent_id or "").strip()
     ext = (external_id or "").strip()
     if not aid:
@@ -789,12 +794,27 @@ def end_session(store, agent_id: str, external_id: str, turns=None) -> dict:
     item = dict(saved)
     item["spec"] = _loads(item.get("spec"), {}) or {}
     item["turns"] = len(turn_list)
-    item["workflow"] = _try_session_workflow(store, aid, item, turn_list)
+    item["workflow"] = _try_session_workflow(store, aid, item, turn_list, gw=gw)
     return item
 
 
-def _try_session_workflow(store, agent_id: str, session: dict, turns: list) -> dict | None:
-    """若 workflows 模块已就绪，跑"智能体会话沉淀"；未就绪时安静跳过。"""
+def _session_gateway(store, gw=None):
+    """会话沉淀用的模型网关：调用方给的优先，否则按本库配置现建（构造不联网）；建不出来返回 None。"""
+    if gw is not None:
+        return gw
+    try:
+        from .models import ModelGateway  # noqa: PLC0415
+        return ModelGateway(store)
+    except Exception:  # noqa: BLE001 - 网关不可用时按无模型降级
+        return None
+
+
+def _try_session_workflow(store, agent_id: str, session: dict, turns: list,
+                          gw=None) -> dict | None:
+    """若 workflows 模块已就绪，跑"智能体会话沉淀"；未就绪时安静跳过。没有 turns 时不跑（说明原因）。"""
+    if not turns:
+        return {"skipped": True, "template": SESSION_WORKFLOW,
+                "reason": "会话没有 turns，未触发会话沉淀"}
     try:
         from . import workflows  # noqa: PLC0415 - 依赖可能尚未落地
     except Exception:  # noqa: BLE001
@@ -803,13 +823,15 @@ def _try_session_workflow(store, agent_id: str, session: dict, turns: list) -> d
     if not callable(runner):
         return None
     try:
-        result = runner(store, None, SESSION_WORKFLOW, {
+        result = runner(store, _session_gateway(store, gw), SESSION_WORKFLOW, {
             "agent_id": agent_id,
+            "agent": agent_id,
             "external_id": session.get("external_id"),
             "title": session.get("title"),
             "turns": turns,
         }, scope=session.get("scope_id") or "global", trigger="session-end")
         return {"id": (result or {}).get("id"), "status": (result or {}).get("status"),
+                "degraded": list((result or {}).get("degraded") or []),
                 "template": SESSION_WORKFLOW}
     except Exception as exc:  # noqa: BLE001 - 工作流失败不影响会话结账
         return {"error": "%s: %s" % (type(exc).__name__, exc),

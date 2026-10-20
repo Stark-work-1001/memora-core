@@ -3,8 +3,8 @@
     "id": "session-distill",
     "name": "智能体会话沉淀",
     "category": "ingest",
-    "version": 2,
-    "description": "把一次智能体会话（任务描述、分析、工具调用、结论）提炼成候选记忆，经判重、来源核验与判定层后沉淀为已审核记忆，并写入按日期的 Markdown。",
+    "version": 3,
+    "description": "把一次智能体会话（任务描述、分析、工具调用、结论）提炼成候选记忆，经判重、来源核验后写入为**候选**（待人工审核），并写入按日期的 Markdown。",
     "trigger": {
       "kind": "session-end",
       "sources": [
@@ -100,11 +100,13 @@
       },
       {
         "id": "persist",
-        "name": "沉淀入 SQLite",
+        "name": "沉淀入 SQLite（候选）",
         "kind": "persist",
         "role": null,
         "params": {
-          "status": "approved"
+          "op": "memory",
+          "status": "candidate",
+          "from": "classify"
         }
       },
       {
@@ -113,6 +115,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "markdown",
           "target": "markdown",
           "layout": "daily"
         }
@@ -185,7 +188,7 @@
     "id": "study-notes-review",
     "name": "学习笔记与复习",
     "category": "learn",
-    "version": 2,
+    "version": 3,
     "description": "把笔记拆成定义/定理/特征/公式/推导/例题六层，生成复习卡片与到期计划（SM-2），并按艾宾浩斯式间隔提醒复习。",
     "trigger": {
       "kind": "manual",
@@ -259,7 +262,9 @@
         "kind": "generate",
         "role": "chat",
         "params": {
-          "algorithm": "SM-2"
+          "types": [
+            "blank"
+          ]
         }
       },
       {
@@ -274,10 +279,15 @@
       },
       {
         "id": "persist",
-        "name": "落库并镜像",
+        "name": "落库（带复习到期时间）",
         "kind": "persist",
         "role": null,
-        "params": {}
+        "params": {
+          "op": "memory",
+          "kind": "knowledge",
+          "review_due_from": "schedule",
+          "from": "didactic"
+        }
       }
     ],
     "edges": [
@@ -327,7 +337,7 @@
     "id": "doc-knowledgeize",
     "name": "外部文档知识化",
     "category": "ingest",
-    "version": 2,
+    "version": 3,
     "description": "吸收 Markdown/PDF/TXT/HTML/JSONL 外部文档：切块、摘要、抽实体、建关系、写入文档库并纳入检索，保留原始出处哈希。",
     "trigger": {
       "kind": "manual",
@@ -378,6 +388,16 @@
         }
       },
       {
+        "id": "persist",
+        "name": "写入文档库",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "op": "document",
+          "mirror": "markdown"
+        }
+      },
+      {
         "id": "summarize",
         "name": "分块摘要",
         "kind": "generate",
@@ -421,7 +441,10 @@
         "name": "向量化",
         "kind": "embed",
         "role": "embedding",
-        "params": {}
+        "params": {
+          "owner_kind": "chunk",
+          "from": "persist"
+        }
       },
       {
         "id": "index_fts",
@@ -431,15 +454,6 @@
         "params": {
           "engine": "fts5",
           "tokenize": "unicode61"
-        }
-      },
-      {
-        "id": "persist",
-        "name": "写入文档库",
-        "kind": "persist",
-        "role": null,
-        "params": {
-          "mirror": "markdown"
         }
       }
     ],
@@ -456,6 +470,11 @@
       },
       {
         "from": "chunk",
+        "to": "persist",
+        "when": "always"
+      },
+      {
+        "from": "persist",
         "to": "summarize",
         "when": "always"
       },
@@ -477,11 +496,6 @@
       {
         "from": "embed",
         "to": "index_fts",
-        "when": "always"
-      },
-      {
-        "from": "index_fts",
-        "to": "persist",
         "when": "always"
       }
     ],
@@ -651,7 +665,7 @@
     "id": "conflict-source-audit",
     "name": "冲突与来源审计",
     "category": "audit",
-    "version": 2,
+    "version": 3,
     "description": "扫描互斥记忆与低信任来源，按证据强度、时间、来源类型排序，产出审计报告与建议动作，人工裁决后写回。",
     "trigger": {
       "kind": "schedule",
@@ -717,7 +731,10 @@
         "name": "写入冲突表与报告文档",
         "kind": "persist",
         "role": null,
-        "params": {}
+        "params": {
+          "op": "conflict",
+          "min_score": 0.5
+        }
       }
     ],
     "edges": [
@@ -756,7 +773,7 @@
     "id": "project-retro",
     "name": "项目决策与经验复盘",
     "category": "learn",
-    "version": 2,
+    "version": 3,
     "description": "从会话与提交记录中抽取决策（背景/选项/取舍/结果），沉淀为可复用的经验条目并关联工作区。",
     "trigger": {
       "kind": "manual",
@@ -775,7 +792,9 @@
         "name": "汇集素材",
         "kind": "input",
         "role": null,
-        "params": {}
+        "params": {
+          "collect": "workspace-sessions"
+        }
       },
       {
         "id": "decision_extract",
@@ -828,7 +847,11 @@
         "name": "沉淀",
         "kind": "persist",
         "role": null,
-        "params": {}
+        "params": {
+          "op": "memory",
+          "kind": "experience",
+          "from": "lessons"
+        }
       }
     ],
     "edges": [
@@ -866,7 +889,7 @@
     "id": "detail-abstraction",
     "name": "细节与抽象线索",
     "category": "transform",
-    "version": 2,
+    "version": 3,
     "description": "把原始细节与抽象线索分离：细节保真留存，抽象生成可检索的 cue（线索），检索时线索命中细节，降低遗忘与错配。",
     "trigger": {
       "kind": "manual",
@@ -908,6 +931,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "link",
           "rel": "cue_of"
         }
       },
@@ -1040,7 +1064,7 @@
     "id": "dedup-merge",
     "name": "新记忆去重与合并",
     "category": "judge",
-    "version": 3,
+    "version": 4,
     "description": "新记忆入库前的核心闸门：近似召回旧记忆 → 打分分层（自动合并/进入判定/新建）→ 判定层给出 ADD/UPDATE/MERGE/SUPERSEDE/LINK/NOOP/ASK，并保留被合并来源。",
     "trigger": {
       "kind": "ingest",
@@ -1109,6 +1133,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "merge",
           "keep_sources": true,
           "keep_history": true
         }
@@ -1119,6 +1144,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "audit",
           "table": "audit"
         }
       }
@@ -1159,7 +1185,7 @@
     "id": "update-supersede",
     "name": "记忆更新与推翻",
     "category": "judge",
-    "version": 2,
+    "version": 3,
     "description": "处理迟到事实与版本演进：为新记忆设定生效时间，把旧记忆置为 superseded 并保留历史链，查询默认只返回当前有效版本。",
     "trigger": {
       "kind": "ingest",
@@ -1168,7 +1194,9 @@
       ]
     },
     "inputs": {
-      "candidate": "候选",
+      "new_id": "推翻者条目 id（可选，须已批准）",
+      "old_id": "被推翻条目 id（可选）",
+      "candidate": "候选（可选：已入库条目 id，配合 target_id）",
       "valid_from": "生效时间"
     },
     "nodes": [
@@ -1199,6 +1227,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "supersede",
           "set_fields": [
             "valid_to",
             "superseded_by",
@@ -1212,6 +1241,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "link",
           "rel": "supersedes"
         }
       },
@@ -1255,7 +1285,7 @@
     "id": "split-decompose",
     "name": "记忆拆解与原子化",
     "category": "transform",
-    "version": 2,
+    "version": 3,
     "description": "把长句/复合记忆拆成单一命题的原子记忆，各自可独立检索、独立判真、独立追溯来源。",
     "trigger": {
       "kind": "ingest",
@@ -1295,20 +1325,25 @@
         }
       },
       {
+        "id": "persist",
+        "name": "写回子记忆",
+        "kind": "persist",
+        "role": null,
+        "params": {
+          "op": "memory",
+          "from": "split"
+        }
+      },
+      {
         "id": "child_links",
         "name": "父子关系",
         "kind": "persist",
         "role": null,
         "params": {
-          "rel": "part_of"
+          "op": "link",
+          "rel": "part_of",
+          "from": "persist"
         }
-      },
-      {
-        "id": "persist",
-        "name": "写回",
-        "kind": "persist",
-        "role": null,
-        "params": {}
       }
     ],
     "edges": [
@@ -1324,12 +1359,12 @@
       },
       {
         "from": "entity_bind",
-        "to": "child_links",
+        "to": "persist",
         "when": "always"
       },
       {
-        "from": "child_links",
-        "to": "persist",
+        "from": "persist",
+        "to": "child_links",
         "when": "always"
       }
     ],
@@ -1417,6 +1452,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "recall_log",
           "table": "recall_log"
         }
       }
@@ -1456,14 +1492,16 @@
     "id": "forget-decay",
     "name": "遗忘与衰减归档",
     "category": "maintain",
-    "version": 2,
-    "description": "按重要度、最近使用、复习稳定性计算衰减；低价值记忆归档而不删除，敏感记忆走硬删除与审计。",
+    "version": 3,
+    "description": "按重要度、最近使用、复习稳定性计算衰减；低价值记忆归档而不删除；硬删除只在显式同意（explicit_consent=true + purge_ids）时执行并审计。",
     "trigger": {
       "kind": "schedule",
       "cron": "30 4 * * *"
     },
     "inputs": {
-      "scope": "作用域"
+      "scope": "作用域",
+      "explicit_consent": "硬删除同意（true 才会执行硬删除）",
+      "purge_ids": "要硬删除的条目 id 列表（需同时给 explicit_consent=true）"
     },
     "nodes": [
       {
@@ -1482,7 +1520,8 @@
         "role": null,
         "params": {
           "algorithm": "exponential-decay",
-          "half_life_days": 30
+          "half_life_days": 30,
+          "archive_below": 0.1
         }
       },
       {
@@ -1491,15 +1530,16 @@
         "kind": "persist",
         "role": null,
         "params": {
-          "status": "archived"
+          "op": "archive"
         }
       },
       {
         "id": "purge",
-        "name": "硬删除（敏感）",
+        "name": "硬删除（需显式同意）",
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "purge",
           "require": "explicit_consent",
           "audit": true
         }
@@ -1623,7 +1663,7 @@
     "id": "preference-learning",
     "name": "用户习惯学习",
     "category": "learn",
-    "version": 2,
+    "version": 3,
     "description": "从对话与操作中归纳用户偏好（语言、风格、工具偏好、禁忌），以独立作用域存续，并提供给所有智能体作为默认上下文。",
     "trigger": {
       "kind": "schedule",
@@ -1638,7 +1678,9 @@
         "name": "汇集行为样本",
         "kind": "input",
         "role": null,
-        "params": {}
+        "params": {
+          "collect": "recent-sessions"
+        }
       },
       {
         "id": "pattern",
@@ -1668,7 +1710,10 @@
         "kind": "persist",
         "role": null,
         "params": {
-          "scope": "global"
+          "op": "memory",
+          "scope": "global",
+          "kind": "preference",
+          "from": "evidence"
         }
       }
     ],
@@ -1718,6 +1763,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "memory",
           "status": "draft",
           "idempotent_by": "event_id"
         }
@@ -1728,6 +1774,7 @@
         "kind": "persist",
         "role": null,
         "params": {
+          "op": "markdown",
           "target": "markdown",
           "layout": "daily"
         }
@@ -1760,7 +1807,7 @@
     "id": "knowledge-graph-build",
     "name": "知识图谱构建",
     "category": "maintain",
-    "version": 2,
+    "version": 3,
     "description": "从记忆与文档中构建实体-关系图：词义关系、层级关系、因果关系、时序关系，并计算社区与中心度，为脑图提供分层数据。",
     "trigger": {
       "kind": "schedule",
@@ -1776,7 +1823,8 @@
         "kind": "extract",
         "role": "extractor",
         "params": {
-          "alias_merge": true
+          "alias_merge": true,
+          "scope_memories": true
         }
       },
       {
@@ -1825,10 +1873,12 @@
       },
       {
         "id": "persist",
-        "name": "写图库",
+        "name": "写图库（汇总）",
         "kind": "persist",
         "role": null,
-        "params": {}
+        "params": {
+          "op": "graph"
+        }
       }
     ],
     "edges": [
@@ -1868,8 +1918,8 @@
     "id": "review-quiz-generate",
     "name": "复习题生成与批改",
     "category": "learn",
-    "version": 2,
-    "description": "基于已审核知识生成单选/填空/简答/推导题，用户作答后由判定层批改并更新掌握度，驱动下一次复习间隔。",
+    "version": 3,
+    "description": "基于已审核知识生成单选/填空/简答/推导题；带上作答（answers）再运行时批改并更新掌握度，驱动下一次复习间隔。",
     "trigger": {
       "kind": "manual",
       "sources": [
@@ -1879,7 +1929,8 @@
     },
     "inputs": {
       "topic": "主题或实体",
-      "count": "题目数量"
+      "count": "题目数量",
+      "answers": "作答列表（可选，按出题顺序）"
     },
     "nodes": [
       {
@@ -1933,7 +1984,9 @@
         "name": "批改",
         "kind": "judge",
         "role": "judge",
-        "params": {}
+        "params": {
+          "rubric": "grade"
+        }
       },
       {
         "id": "update",
@@ -1941,7 +1994,7 @@
         "kind": "persist",
         "role": null,
         "params": {
-          "rel": "review_log"
+          "op": "review_log"
         }
       }
     ],

@@ -18,42 +18,46 @@ export interface Paged<T> {
 }
 
 /* ------------------------------------------------------------------ 健康 / 总览 */
+/*
+ * 以下形状逐字段对照 memora_core/server.py 的 api_health / api_overview。
+ * 后端是唯一真源：这里写的字段名必须是后端真的会发的名字，
+ * tests/e2e-app.test.mjs 会把页面上的数字和 API 返回逐一比对。
+ */
 
-export interface HealthCounts {
-  memories?: number;
-  documents?: number;
-  agents?: number;
-  runs?: number;
-  candidates?: number;
-  conflicts?: number;
-  edges?: number;
-  entities?: number;
-  [key: string]: number | undefined;
-}
-
-export interface RoleHealth {
-  role: string;
-  configured?: boolean;
+/** /api/health 的 models[role] 与 /api/models 的 health[role]。 */
+export interface ModelRoleHealth {
   ok?: boolean;
   degraded?: boolean;
+  provider?: string | null;
+  model?: string | null;
+  configured?: boolean;
   last_error?: string | null;
-  model?: string;
-  provider?: string;
+  calls_24h?: number;
+  avg_latency_ms?: number;
 }
 
 export interface Health {
-  version?: string;
   ok?: boolean;
+  version?: string;
   uptime_s?: number;
   started_at?: string;
-  db_path?: string;
-  vault_path?: string;
-  degraded?: boolean;
-  degraded_running?: string[];
-  counts?: HealthCounts;
-  roles?: RoleHealth[] | Record<string, RoleHealth>;
-  fts_ok?: boolean;
-  ts?: string;
+  data_dir?: string;
+  pid?: number;
+  /** 表名 → 行数（memory / document / chunk / …）；null 表示该表计数失败。 */
+  db?: Record<string, number | null>;
+  db_ok?: boolean;
+  db_integrity?: string | null;
+  /** 角色 → 模型健康（chat / embedding / reranker / judge / extractor / vision）。 */
+  models?: Record<string, ModelRoleHealth>;
+  /** 降级能力**列表**：空数组表示没有降级（注意 [] 在 JS 里是真值，别用 Boolean()）。 */
+  degraded?: string[];
+  unavailable?: string[];
+  capabilities?: Record<string, { ok?: boolean; error?: string | null }>;
+  events?: Dict;
+  requests?: number;
+  sse_clients?: number;
+  /** 后端可能追加的字段（只增不改）。 */
+  [key: string]: unknown;
 }
 
 export interface DistBucket {
@@ -67,51 +71,77 @@ export interface TrendPoint {
   count: number;
 }
 
+export interface OverviewTotals {
+  memories?: number;
+  approved?: number;
+  candidates?: number;
+  documents?: number;
+  chunks?: number;
+  evidence?: number;
+  edges?: number;
+  entities?: number;
+  scopes?: number;
+  conflicts_open?: number;
+}
+
+export interface PendingReview {
+  id: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  trust?: number;
+  review_due?: string | null;
+  recorded_at?: string;
+}
+
+/** /api/overview（server.py api_overview）。 */
 export interface Overview {
-  health?: Health;
-  counts?: HealthCounts;
-  total_memories?: number;
-  today_new?: number;
-  week_new?: number;
-  pending_candidates?: number;
-  by_kind?: DistBucket[];
-  by_scope?: DistBucket[];
-  by_status?: DistBucket[];
-  trend?: TrendPoint[];
-  trend_7d?: TrendPoint[];
+  totals?: OverviewTotals;
+  /** kind → 条数。 */
+  by_kind?: Record<string, number>;
+  by_scope?: { scope_id: string; count: number }[];
+  /** 近 30 天按日入库数；没有入库的日子不出现（前端补零）。 */
+  daily?: { day: string; count: number }[];
   recent_runs?: RunSummary[];
-  agents_online?: AgentStatus[];
+  pending_reviews?: PendingReview[];
   agents?: AgentStatus[];
   degraded?: string[];
-  roles?: RoleHealth[];
+  generated_at?: string;
+  /** 聚合失败时后端如实报告（降级契约），页面必须展示。 */
+  store_error?: string;
+  aggregate_error?: string;
 }
 
 /* ------------------------------------------------------------------ 记忆 */
 
-export type MemoryStatus = 'candidate' | 'approved' | 'rejected' | 'superseded' | 'merged' | 'archived';
+/** 与 store.STATUSES 一致。 */
+export type MemoryStatus = 'draft' | 'candidate' | 'approved' | 'rejected' | 'superseded' | 'merged' | 'archived';
 
 export interface Evidence {
   id?: string;
   memory_id?: string;
+  document_id?: string | null;
+  chunk_id?: string | null;
   kind?: string;
-  source?: string;
-  uri?: string;
-  quote?: string;
+  uri?: string | null;
+  quote?: string | null;
   trust?: number;
-  weight?: number;
+  verified?: boolean;
+  verifier?: string | null;
+  note?: string | null;
   created_at?: string;
-  meta?: Dict;
 }
 
+/** store.block 行：富块类型字段名是 `type`（formula / code / table / …）。 */
 export interface MemBlock {
   id?: string;
   memory_id?: string;
-  kind?: string;
-  lang?: string | null;
-  content?: string;
-  text?: string;
   ordinal?: number;
-  meta?: Dict;
+  type?: string;
+  lang?: string | null;
+  caption?: string | null;
+  content?: string;
+  fields?: Dict;
 }
 
 export interface MemoryEdge {
@@ -126,33 +156,66 @@ export interface MemoryEdge {
   origin?: string;
 }
 
+/** 学习型记忆的六层讲解（seed / 工作流写入）。 */
+export interface Didactic {
+  definition?: string;
+  formula?: string;
+  property?: string;
+  example?: string;
+  [key: string]: unknown;
+}
+
+/** store.get_memory / list_memories 的行。时间字段是 recorded_at（没有 created_at）。 */
 export interface Memory {
   id: string;
   title?: string;
   body?: string;
-  summary?: string;
+  summary?: string | null;
   kind?: string;
+  category?: string | null;
   scope_id?: string;
-  scope?: string;
   status?: MemoryStatus | string;
-  agent_id?: string;
+  agent_id?: string | null;
+  session_id?: string | null;
   trust?: number;
+  importance?: number;
   confidence?: number;
+  sensitivity?: string;
   tags?: string[];
-  created_at?: string;
+  didactic?: Didactic | null;
+  recorded_at?: string;
   updated_at?: string;
-  reviewed_at?: string;
+  review_due?: string | null;
   review_count?: number;
-  ease?: number;
-  interval_days?: number;
-  due_at?: string;
+  last_reviewed?: string | null;
+  /** SM-2 间隔（天）。 */
+  stability?: number | null;
+  difficulty?: number | null;
+  superseded_by?: string | null;
+  merged_into?: string | null;
+  source_count?: number;
+  pinned?: number | boolean;
+  snippet?: string;
   evidence?: Evidence[];
   blocks?: MemBlock[];
   edges?: MemoryEdge[];
-  related?: Memory[];
-  source_document_id?: string;
-  path?: string;
+  entities?: Dict[];
+  documents?: Dict[];
+  history?: Dict[];
   [key: string]: unknown;
+}
+
+/** POST /api/memories/{id}/review 的返回（不是 Memory）。 */
+export interface ReviewResult {
+  ok?: boolean;
+  memory_id?: string;
+  grade?: number;
+  ease?: number;
+  interval?: number;
+  due?: string;
+  difficulty?: number;
+  review_count?: number;
+  status?: string;
 }
 
 export interface MemoryListQuery {
@@ -161,7 +224,9 @@ export interface MemoryListQuery {
   kind?: string;
   status?: string;
   agent?: string;
+  /** store.SORTS：updated_at / recorded_at / importance / trust / review_due。 */
   sort?: string;
+  order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
   include_candidates?: boolean;
@@ -198,31 +263,48 @@ export interface SearchResult {
   strategy?: string;
   total?: number;
   query?: string;
+  /** 1.1.0 起：实际跑过的通道、向量来源（null = 没有向量通道）、是否语义、是否重排、分数含义 */
+  channels_used?: string[];
+  vector_model?: string | null;
+  semantic?: boolean;
+  reranked?: boolean;
+  score_kind?: string;
 }
 
 /* ------------------------------------------------------------------ 文档 */
 
+/** store.document 行（/api/documents 列表项）。路径字段是 vault 内相对路径 `path`。 */
 export interface DocumentRow {
   id: string;
-  title?: string;
-  rel_path?: string;
-  path?: string;
   kind?: string;
-  bytes?: number;
-  chunks?: number;
-  memories?: number;
-  updated_at?: string;
-  created_at?: string;
-  indexed_at?: string;
+  path?: string;
+  title?: string | null;
+  scope_id?: string | null;
+  day?: string | null;
   hash?: string;
-  source?: string;
+  bytes?: number;
+  frontmatter?: Dict;
+  origin?: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+  indexed_at?: string | null;
 }
 
-export interface DocumentDetail extends DocumentRow {
-  raw?: string;
-  markdown?: string;
+export interface DocumentChunk {
+  id?: string;
+  ordinal?: number;
+  heading?: string | null;
+  level?: number | null;
+  tokens?: number;
+  start_line?: number | null;
+  end_line?: number | null;
   preview?: string;
-  chunk_list?: { id?: string; ordinal?: number; text?: string; tokens?: number }[];
+}
+
+/** /api/documents/{id}：chunks 是**数组**（前 400 字预览），原文走 /raw。 */
+export interface DocumentDetail extends DocumentRow {
+  chunks?: DocumentChunk[];
 }
 
 /* ------------------------------------------------------------------ 工作流 */
@@ -311,82 +393,112 @@ export interface RunDetail extends RunSummary {
 
 /* ------------------------------------------------------------------ 智能体 */
 
+/** agents._probe_summary：每类探针最新一次结果。state=found 表示命中。 */
 export interface AgentProbe {
-  type?: string;
-  target?: string;
-  ok?: boolean;
-  detail?: string;
-  evidence?: string;
-  match?: unknown;
+  probe?: string;
+  state?: string;
+  detail?: string | null;
+  latency_ms?: number | null;
+  at?: string;
+  target?: string | null;
+  found?: number;
+  total?: number;
 }
 
+/** agents.agent_status 的行：sessions / memories 是**对象**不是数字。 */
 export interface AgentStatus {
   id: string;
-  name?: string;
+  display_name?: string;
   ecosystem?: string;
   kind?: string;
   status?: 'online' | 'idle' | 'offline' | string;
-  online?: boolean;
-  last_seen?: string;
-  heartbeat_at?: string;
-  sessions?: number;
-  memories?: number;
-  probes?: AgentProbe[];
-  evidence?: string[];
+  online_since?: string | null;
+  last_seen?: string | null;
+  last_heartbeat?: string | null;
+  heartbeat_source?: string | null;
+  static_registered?: boolean;
+  enabled?: boolean;
   protocols?: string[];
   config_hint?: string;
-  config_snippet?: string;
-  confidence?: number;
+  capabilities?: Dict;
+  probes?: AgentProbe[];
+  sessions?: { total?: number; active?: number; recent?: Dict[] };
+  memories?: { total?: number; approved?: number; last_at?: string | null };
+}
+
+/** GET /api/agents/{id}/config。 */
+export interface AgentConfig {
+  agent?: string;
+  display_name?: string;
+  ecosystem?: string;
+  protocols?: string[];
+  config?: Dict;
+  hint?: string;
+  status?: string;
 }
 
 /* ------------------------------------------------------------------ 模型 */
 
-export type ModelRole = 'chat' | 'embedding' | 'reranker' | 'judge';
+/** 与 memora_core/models.py 的 ROLES / PROVIDERS 一致。 */
+export const MODEL_ROLES = ['chat', 'embedding', 'reranker', 'judge', 'extractor', 'vision'] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
+export const MODEL_PROVIDERS = ['openai', 'openai-compatible', 'dashscope', 'deepseek', 'ollama', 'none'] as const;
 
+/** ModelProfile.to_dict()。超时字段是毫秒 timeout_ms；密钥只以 api_key_ref 引用出现。 */
 export interface ModelProfile {
   id?: string;
   role: ModelRole | string;
+  label?: string;
   provider?: string;
-  base_url?: string;
   model?: string;
-  api_key?: string;
-  api_key_set?: boolean;
+  base_url?: string;
+  api_key_ref?: string | null;
   dim?: number;
   batch?: number;
-  timeout?: number;
+  timeout_ms?: number;
+  params?: Dict;
+  priority?: number;
   enabled?: boolean;
-  temperature?: number;
-  max_tokens?: number;
-  last_ok?: string;
-  last_error?: string | null;
-  degraded?: boolean;
-  ok?: boolean;
-}
-
-export interface ModelCall {
-  id?: string | number;
-  role?: string;
-  model?: string;
-  provider?: string;
-  status?: string;
-  ok?: boolean;
-  latency_ms?: number;
-  tokens_in?: number;
-  tokens_out?: number;
-  cost?: number;
-  error?: string | null;
   created_at?: string;
-  purpose?: string;
+  hint?: string;
 }
 
+/** GET /api/models 整体。 */
+export interface ModelsState {
+  roles: Record<string, ModelProfile | null>;
+  by_role: Record<string, ModelProfile[]>;
+  profiles: ModelProfile[];
+  health: Record<string, ModelRoleHealth>;
+  degraded: string[];
+  unavailable?: string[];
+  note?: string;
+}
+
+/** model_call 行（ok 是 0/1）。 */
+export interface ModelCall {
+  id?: string;
+  role?: string;
+  provider?: string;
+  model?: string;
+  ok?: boolean | number;
+  http_status?: number | null;
+  latency_ms?: number | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  error?: string | null;
+  degraded?: boolean | number;
+  run_id?: string | null;
+  created_at?: string;
+}
+
+/** ModelGateway.test()。 */
 export interface ModelTestResult {
   ok?: boolean;
-  role?: string;
-  model?: string;
-  latency_ms?: number;
-  status?: string;
-  error?: string;
+  mode?: string;
   detail?: string;
+  latency_ms?: number;
+  provider?: string;
+  model?: string;
 }
 
 /* ------------------------------------------------------------------ 算法目录 */
@@ -435,19 +547,21 @@ export interface GraphData {
 
 /* ------------------------------------------------------------------ 冲突 / 任务 */
 
+/** conflict 行：两侧只给 id（a_id / b_id），标题需另取；detail 是对象。 */
 export interface Conflict {
   id: string;
-  status?: string;
   kind?: string;
-  memory_a?: string;
-  memory_b?: string;
-  title_a?: string;
-  title_b?: string;
-  summary?: string;
-  detail?: string;
-  similarity?: number;
+  a_id?: string | null;
+  b_id?: string | null;
+  score?: number;
+  detail?: { summary?: string; [key: string]: unknown } | null;
+  status?: string;
+  resolution?: string | null;
   created_at?: string;
-  resolution?: string;
+  resolved_at?: string | null;
+  /** 若后端将来附带标题（additive），优先使用。 */
+  a_title?: string;
+  b_title?: string;
 }
 
 export interface Job {
@@ -463,23 +577,18 @@ export interface Job {
 
 /* ------------------------------------------------------------------ 设置 / 事件 */
 
+/** GET /api/settings：values 是 setting 表原样；runtime 是本进程真实的启动参数。 */
 export interface Settings {
-  data_dir?: string;
-  vault_dir?: string;
-  port?: number;
-  host?: string;
-  auto_backup?: boolean | number;
-  backup_interval_h?: number;
-  absorb_strategy?: string;
-  offline_fallback?: boolean | number;
-  offline_mode?: boolean | number;
-  [key: string]: unknown;
+  values?: Record<string, unknown>;
+  total?: number;
+  runtime?: { version?: string; data_dir?: string; port?: number; host?: string };
 }
 
+/** events.EVENT_TYPES：run / memory / agent / log / heartbeat / system；ts 是秒级浮点。 */
 export interface ServerEvent {
-  type: 'run' | 'memory' | 'agent' | 'log' | string;
+  type: 'run' | 'memory' | 'agent' | 'log' | 'heartbeat' | 'system' | string;
   data?: Dict;
-  ts?: string;
+  ts?: number | string;
 }
 
 export interface ConnectionState {
@@ -489,6 +598,7 @@ export interface ConnectionState {
   reason?: string;
 }
 
+/** 与 store.MEMORY_KINDS 一致（顺序也一致）。 */
 export const KIND_LABELS: Record<string, string> = {
   fact: '事实',
   knowledge: '知识',
@@ -497,12 +607,14 @@ export const KIND_LABELS: Record<string, string> = {
   procedure: '流程',
   experience: '经验',
   task: '任务',
+  turn: '对话轮次',
   tool: '工具',
-  insight: '洞察',
-  context: '上下文',
+  artifact: '产物',
 };
 
+/** 与 store.STATUSES 一致。 */
 export const STATUS_LABELS: Record<string, string> = {
+  draft: '草稿',
   candidate: '待审',
   approved: '已批准',
   rejected: '已拒绝',
@@ -528,6 +640,7 @@ export const ALGO_CATEGORY_LABELS: Record<string, string> = {
   index: '索引',
   verify: '核验',
   chunking: '切块',
+  audit: '审计',
 };
 
 export const NODE_KIND_COLORS: Record<string, string> = {

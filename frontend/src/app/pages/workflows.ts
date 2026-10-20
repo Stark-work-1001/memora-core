@@ -12,6 +12,7 @@ import {
   jsonBlock, modal, skeleton, statusBadge, textInput, toast,
 } from './ui';
 import type { PageModule } from './contract';
+import { isLive, runDegraded, runDurationMs, runProgress, runSteps } from './runs';
 
 /* ---------------------------------------------------------------- 布局计算 */
 
@@ -140,6 +141,8 @@ interface CanvasView {
   setTemplate(template: WorkflowTemplate | null): void;
   resize(): void;
   focusNode(id: string): void;
+  /** 摘掉挂在 window 上的拖拽监听（页面 mem:dispose 时调用，避免切页后泄漏）。 */
+  dispose(): void;
 }
 
 function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView {
@@ -330,7 +333,7 @@ function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView
     lastY = ev.clientY;
     canvas.classList.add('is-dragging');
   });
-  window.addEventListener('mousemove', (ev) => {
+  const onMouseMove = (ev: MouseEvent): void => {
     if (!dragging) return;
     const dx = ev.clientX - lastX;
     const dy = ev.clientY - lastY;
@@ -340,8 +343,8 @@ function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView
     lastX = ev.clientX;
     lastY = ev.clientY;
     draw();
-  });
-  window.addEventListener('mouseup', (ev) => {
+  };
+  const onMouseUp = (ev: MouseEvent): void => {
     if (!dragging) return;
     dragging = false;
     canvas.classList.remove('is-dragging');
@@ -351,7 +354,9 @@ function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView
       onSelect(node);
       draw();
     }
-  });
+  };
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
   canvas.addEventListener('wheel', (ev) => {
     ev.preventDefault();
     const rect = canvas.getBoundingClientRect();
@@ -374,6 +379,10 @@ function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView
       draw();
     },
     resize: draw,
+    dispose() {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    },
     focusNode(id) {
       if (!layout) return;
       const target = layout.nodes.find((item) => item.node.id === id);
@@ -387,6 +396,21 @@ function createCanvas(onSelect: (node: WorkflowNode | null) => void): CanvasView
 }
 
 /* ---------------------------------------------------------------- 运行结果 */
+
+type Loose = Record<string, unknown>;
+
+/** 模板触发器没有任何组件会触发（cron / ingest，本版本没有调度器）时如实标出来。 */
+function triggerBadge(template: WorkflowTemplate): HTMLElement | null {
+  const loose = template as unknown as Loose;
+  if (loose.trigger_active !== false) return null;
+  return el('span', { title: String(loose.trigger_note ?? '') }, badge('触发器未激活', 'muted'));
+}
+
+function problemBadge(template: WorkflowTemplate): HTMLElement | null {
+  const problems = (template as unknown as Loose).problems;
+  if (!Array.isArray(problems) || !problems.length) return null;
+  return el('span', { title: problems.map(String).join('\n') }, badge(`模板有 ${problems.length} 个问题`, 'danger'));
+}
 
 function stepRow(step: RunStep): HTMLElement {
   const degraded = Boolean(step.degraded);
@@ -427,6 +451,8 @@ export const workflowsPage: PageModule = {
     let categoryFilter = '';
     let search = '';
     let lastRun: RunDetail | null = null;
+    let pollTimer: number | undefined;
+    let eventTimer: number | undefined;
 
     const page = el('div', { class: 'page page-workflows' });
     const split = el('div', { class: 'split split-workflow' });
@@ -503,7 +529,9 @@ export const workflowsPage: PageModule = {
             el('span', { class: 'mono muted-text' }, `v${template.version ?? 1}`),
             el('span', { class: 'muted-text' }, `${nodeCount} 节点`),
             el('span', { class: 'muted-text' }, `${template.edges?.length ?? 0} 边`),
-            template.last_run ? el('span', { class: 'muted-text' }, `上次 ${fmtRelative(template.last_run)}`) : null));
+            template.last_run ? el('span', { class: 'muted-text' }, `上次 ${fmtRelative(template.last_run)}`) : null,
+            triggerBadge(template),
+            problemBadge(template)));
         frag.appendChild(item);
       }
       listHost.replaceChildren(frag);
@@ -609,7 +637,8 @@ export const workflowsPage: PageModule = {
         width: 760,
         body: [
           el('p', { class: 'modal-hint' },
-            '输入为 JSON，形如 {"inputs": {...}, "scope": "global"}。缺失的输入会按模板默认值处理。'),
+            '输入为 JSON，形如 {"inputs": {...}, "scope": "global"}。只需填模板声明的输入，'
+            + '说明里标了「可选」的可以留空。运行在后台执行，进度实时显示在下方，可随时取消。'),
           el('div', { class: 'field' }, el('span', { class: 'field-label' }, '作用域'), scopeInput),
           editor,
           errorLine,
@@ -628,13 +657,16 @@ export const workflowsPage: PageModule = {
         errorLine.textContent = '';
         const done = busy(runBtn);
         try {
-          const run = await api.runWorkflow(
+          // 异步运行：后端立即返回 202（queued/running），不再让浏览器挂着一个 120 秒的 POST
+          const run = await api.runWorkflowAsync(
             template.id,
             (parsed.inputs ?? {}) as Record<string, unknown>,
             parsed.scope ?? scopeInput.value.trim() ?? 'global',
           );
           handle.close();
-          toast(`运行已提交：${run.id ?? '（无 id）'}`, 'ok');
+          toast(`运行已开始：${run.id ?? '（无 id）'}`, 'ok');
+          lastRun = run;
+          renderRun(run);
           await loadRun(run.id);
         } catch (error) {
           errorLine.textContent = errorMessage(error);
@@ -645,51 +677,83 @@ export const workflowsPage: PageModule = {
       });
     }
 
-    async function loadRun(runId: string | undefined): Promise<void> {
+    async function loadRun(runId: string | undefined, silent = false): Promise<void> {
+      window.clearTimeout(pollTimer);
       if (!runId) {
         runHost.replaceChildren(emptyState('运行已提交', '后端没有返回运行 id，请到「运行记录」查看'));
         return;
       }
-      runHost.replaceChildren(
-        card({ title: '运行结果', body: [skeleton(3)] }),
-      );
+      if (!silent && !lastRun) {
+        runHost.replaceChildren(card({ title: '运行结果', body: [skeleton(3)] }));
+      }
       try {
         const detail = await api.run(runId);
-        if (disposed) return;
+        if (disposed || (lastRun && lastRun.id !== runId)) return;
         lastRun = detail;
         renderRun(detail);
+        // 运行还没结束：每 800ms 轮询一次（SSE run 事件也会触发刷新），结束后停止
+        if (isLive(detail.status)) {
+          pollTimer = window.setTimeout(() => void loadRun(runId, true), 800);
+        }
       } catch (error) {
-        if (disposed) return;
+        if (disposed || silent) return;
         runHost.replaceChildren(errorState({ error, title: '运行详情加载失败', onRetry: () => void loadRun(runId) }));
       }
     }
 
+    async function cancelRun(runId: string, trigger: HTMLButtonElement): Promise<void> {
+      trigger.disabled = true;
+      try {
+        const run = await api.cancelRun(runId);
+        toast(run.status === 'cancelled' ? '运行已取消' : '已请求取消，等待当前节点结束', 'info');
+      } catch (error) {
+        toast(`取消失败：${errorMessage(error)}`, 'warn');
+      } finally {
+        if (!disposed) void loadRun(runId, true);
+      }
+    }
+
     function renderRun(detail: RunDetail): void {
-      const steps = detail.step_list ?? [];
+      const steps = runSteps(detail);
+      const degraded = runDegraded(detail);
+      const live = isLive(detail.status);
+      const progress = runProgress(detail);
+      const loose = detail as unknown as Loose;
       const head = el('div', { class: 'run-head' },
         el('div', null,
           el('h3', { class: 'run-title' }, detail.template_name ?? detail.name ?? detail.template_id ?? detail.id),
           el('div', { class: 'muted-text mono' }, detail.id)),
         statusBadge(detail.status),
-        badge(fmtDuration(detail.duration_ms), 'muted'),
-        detail.degraded ? badge('含降级步骤', 'warn') : null);
+        badge(live ? `进度 ${progress.done}/${progress.total}` : fmtDuration(runDurationMs(detail)), 'muted'),
+        degraded.length ? badge(`降级：${degraded.join(' / ')}`, 'warn') : null,
+        loose.cancel_requested && live ? badge('已请求取消', 'warn') : null,
+        live
+          ? button('取消运行', {
+            kind: 'danger',
+            iconName: 'close',
+            disabled: Boolean(loose.cancel_requested),
+            onClick: (ev) => void cancelRun(detail.id, ev.currentTarget as HTMLButtonElement),
+          })
+          : null);
 
       const list = el('div', { class: 'timeline' });
       if (steps.length) {
         for (const step of steps) list.appendChild(stepRow(step));
       } else {
-        list.appendChild(emptyState('没有步骤记录', '可能是模板没有节点，或运行尚未产生步骤'));
+        list.appendChild(emptyState(live ? '排队中' : '没有步骤记录',
+          live ? '运行已提交，等待执行器开始' : '可能是模板没有节点，或运行尚未产生步骤'));
       }
 
-      runHost.replaceChildren(card({ title: '运行结果', body: [] }), el('div'));
-      const box = card({ title: '运行结果', subtitle: `${steps.length} 步` });
+      const box = card({ title: '运行结果', subtitle: live ? `运行中 · ${steps.length} 步已开始` : `${steps.length} 步` });
       box.appendChild(head);
       box.appendChild(list);
       box.appendChild(el('details', { class: 'json-details' },
         el('summary', null, '完整运行 JSON'),
         jsonBlock(detail)));
       runHost.replaceChildren(box);
-      ctx.setStatus(`运行 ${detail.status ?? '未知'} · ${fmtDuration(detail.duration_ms)}`);
+      ctx.setStatus(live
+        ? `运行 ${detail.status ?? ''} · ${progress.done}/${progress.total}`
+        : `运行 ${detail.status ?? '未知'} · ${fmtDuration(runDurationMs(detail))}`);
     }
 
     /* -------- 加载 -------- */
@@ -721,13 +785,20 @@ export const workflowsPage: PageModule = {
     void load();
     window.requestAnimationFrame(() => canvasView.resize());
 
+    // SSE run 事件（每一步都会发）：去抖后静默刷新当前运行
     const unsub = ctx.onEvent(['run'], () => {
-      if (lastRun?.id) void loadRun(lastRun.id);
+      window.clearTimeout(eventTimer);
+      eventTimer = window.setTimeout(() => {
+        if (!disposed && lastRun?.id) void loadRun(lastRun.id, true);
+      }, 200);
     });
 
     ctx.mount.addEventListener('mem:dispose', () => {
       disposed = true;
+      window.clearTimeout(pollTimer);
+      window.clearTimeout(eventTimer);
       window.removeEventListener('resize', unsubResize);
+      canvasView.dispose();
       unsub();
     }, { once: true });
   },

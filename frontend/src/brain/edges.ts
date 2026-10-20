@@ -50,6 +50,12 @@ export const REL_COLORS: Record<string, string> = {
   alias: '#8899aa',
   prerequisite: '#d0a03f',
   evidence_for: '#ffd166',
+  // store.graph 产生的结构关系
+  contains: '#8a9bb0',
+  in_scope: '#c9b46a',
+  evidence: '#ffd166',
+  document: '#b8a2d8',
+  chunk: '#a58fc9',
   default: '#557a94',
 };
 

@@ -25,8 +25,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..', '..');
 const staticDir = path.join(repo, 'memora_core', 'static');
 
+// MEMORA_CHROME 可显式指定浏览器；否则按下面的顺序找。Chrome 的"仅为我安装"会落在
+// %LOCALAPPDATA% 下，原先的列表漏了它，于是退回 Edge——而 Edge 在已有实例时会把
+// 无头启动交给旧进程后立刻 code=0 退出，测试因此报"Chrome 提前退出"。
 const CHROME_CANDIDATES = [
+  ...(process.env.MEMORA_CHROME ? [process.env.MEMORA_CHROME] : []),
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')] : []),
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',

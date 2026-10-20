@@ -99,6 +99,7 @@ export function badge(label: string, tone: Tone = 'muted', title?: string): HTML
 export function statusBadge(status: unknown): HTMLElement {
   const key = String(status ?? '').toLowerCase();
   const map: Record<string, { tone: Tone; label: string }> = {
+    draft: { tone: 'muted', label: '草稿' },
     approved: { tone: 'ok', label: '已批准' },
     candidate: { tone: 'warn', label: '待审' },
     rejected: { tone: 'danger', label: '已拒绝' },
@@ -115,7 +116,13 @@ export function statusBadge(status: unknown): HTMLElement {
     pending: { tone: 'warn', label: '等待中' },
     queued: { tone: 'muted', label: '排队' },
     failed: { tone: 'danger', label: '失败' },
+    cancelled: { tone: 'muted', label: '已取消' },
     error: { tone: 'danger', label: '错误' },
+    open: { tone: 'warn', label: '待处理' },
+    resolved: { tone: 'ok', label: '已裁决' },
+    ignored: { tone: 'muted', label: '已忽略' },
+    found: { tone: 'ok', label: '命中' },
+    absent: { tone: 'muted', label: '未命中' },
     online: { tone: 'ok', label: '在线' },
     idle: { tone: 'info', label: '空闲' },
     offline: { tone: 'muted', label: '离线' },
@@ -369,6 +376,37 @@ export interface ModalHandle {
 }
 
 let activeModal: ModalHandle | null = null;
+let modalSeq = 0;
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+  + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** root 内可聚焦且可见的控件（模态框、全局搜索面板共用）。 */
+export function focusableIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
+    .filter((node) => node.getClientRects().length > 0);
+}
+
+/** 焦点陷阱：Tab / Shift+Tab 在 root 内循环，不让焦点漏到被遮住的页面上。 */
+export function trapFocus(root: HTMLElement, ev: KeyboardEvent): void {
+  if (ev.key !== 'Tab') return;
+  const items = focusableIn(root);
+  if (!items.length) {
+    ev.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (ev.shiftKey && (active === first || !root.contains(active))) {
+    ev.preventDefault();
+    last.focus();
+  } else if (!ev.shiftKey && (active === last || !root.contains(active))) {
+    ev.preventDefault();
+    first.focus();
+  }
+}
 
 export function isModalOpen(): boolean {
   return activeModal !== null;
@@ -389,26 +427,39 @@ export function modal(options: {
 }): ModalHandle {
   closeActiveModal();
 
-  const root = el('div', { class: 'modal-backdrop', role: 'dialog', 'aria-modal': 'true' });
+  // a11y：对话框语义挂在面板上并由标题命名；打开时把焦点移进来，Tab 不外漏，关闭时还给原来的控件。
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const titleId = `mem-modal-title-${(modalSeq += 1)}`;
+  const root = el('div', { class: 'modal-backdrop' });
   const panel = el('div', {
     class: 'modal-panel',
-    style: { width: `${options.width ?? 640}px` },
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-labelledby': titleId,
+    tabindex: '-1',
+    style: { width: `min(${options.width ?? 640}px, calc(100vw - 32px))` },
   });
+  let closed = false;
   const close = (): void => {
+    if (closed) return;
+    closed = true;
     root.remove();
     document.removeEventListener('keydown', onKey);
     if (activeModal === handle) activeModal = null;
     options.onClose?.();
+    if (previous && previous.isConnected) previous.focus();
   };
   const onKey = (ev: KeyboardEvent): void => {
     if (ev.key === 'Escape') {
       ev.stopPropagation();
       close();
+      return;
     }
+    trapFocus(panel, ev);
   };
 
   panel.appendChild(el('div', { class: 'modal-head' },
-    el('h2', { class: 'modal-title' }, options.title),
+    el('h2', { class: 'modal-title', id: titleId }, options.title),
     el('button', {
       class: 'icon-btn',
       type: 'button',
@@ -428,16 +479,20 @@ export function modal(options: {
 
   const handle: ModalHandle = { close, root };
   activeModal = handle;
+  // 初始焦点：正文/操作区第一个控件（跳过右上角关闭按钮），没有就聚焦面板本身。
+  const initial = focusableIn(panel).find((node) => !node.closest('.modal-head')) ?? panel;
+  initial.focus();
   return handle;
 }
 
 export function toast(message: string, tone: Tone = 'info', timeoutMs = 3200): void {
   let host = document.getElementById('mem-toasts');
   if (!host) {
-    host = el('div', { id: 'mem-toasts', class: 'toast-host' });
+    // aria-live：读屏软件会播报 toast；危险提示单独用 role=alert 立即打断。
+    host = el('div', { id: 'mem-toasts', class: 'toast-host', role: 'status', 'aria-live': 'polite' });
     document.body.appendChild(host);
   }
-  const node = el('div', { class: `toast toast-${tone}` }, message);
+  const node = el('div', { class: `toast toast-${tone}`, role: tone === 'danger' ? 'alert' : null }, message);
   host.appendChild(node);
   window.setTimeout(() => {
     node.classList.add('is-leaving');
@@ -514,7 +569,7 @@ export function bucketsFrom(value: unknown): { key: string; count: number }[] {
     for (const item of value) {
       if (!item || typeof item !== 'object') continue;
       const record = item as Record<string, unknown>;
-      const key = String(record.key ?? record.kind ?? record.scope ?? record.name ?? record.label ?? '');
+      const key = String(record.key ?? record.scope_id ?? record.kind ?? record.scope ?? record.name ?? record.label ?? '');
       const count = Number(record.count ?? record.n ?? record.value ?? 0);
       if (key) out.push({ key, count: Number.isFinite(count) ? count : 0 });
     }

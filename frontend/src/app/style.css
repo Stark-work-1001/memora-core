@@ -1448,3 +1448,53 @@ kbd {
   .split-left { border-right: none; border-bottom: 1px solid var(--border); }
   .vlist { max-height: 46vh; }
 }
+
+/* ---------------------------------------------------------------- 可访问性
+   键盘焦点必须看得见：1.0.0 输入框是 outline:none + 10% 透明度光环，按钮没有任何焦点样式。
+   只对键盘焦点（:focus-visible）画环，鼠标点击不受影响。 */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+.palette-input:focus-visible { outline: none; }
+.palette-head:focus-within { box-shadow: inset 0 -2px 0 var(--primary); }
+.modal-panel:focus { outline: none; }
+.modal-panel:focus-visible { outline: 2px solid var(--primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------- 1.1：总览库存行 / 设置键值 / 讲解 / 公式 */
+.inventory-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 2px 0 12px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.inventory-item { display: inline-flex; align-items: baseline; gap: 6px; }
+.inventory-item strong { color: var(--text); }
+.inventory-item.is-warn strong { color: var(--warn); }
+.kv-row { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.kv-key { flex: 0 0 120px; }
+.kv-value { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+.didactic-row { padding: 8px 0; border-top: 1px solid var(--border); }
+.didactic-row:first-of-type { border-top: none; }
+.didactic-label { font-size: 11px; margin-bottom: 4px; }
+.math-inline-display { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; }
+.math-skipped { font-family: var(--mono); color: var(--text-dim); }
+.markdown-body .md-link.is-external::after { content: " \2197"; font-size: 0.85em; color: var(--text-muted); }

@@ -53,6 +53,7 @@ export const KIND_LABEL: Record<string, string> = {
   experience: '经验', task: '任务', turn: '对话', tool: '工具', artifact: '产物',
   concept: '概念', entity: '实体', person: '人物', project: '项目', term: '术语',
   memory: '记忆', evidence: '证据', source: '来源', document: '文档',
+  scope: '作用域', day: '日期', chunk: '切块',
 };
 
 /** 视图中文名。 */

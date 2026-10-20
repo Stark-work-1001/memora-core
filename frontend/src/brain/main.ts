@@ -16,7 +16,7 @@ import { BrainScene } from './scene';
 import { NodeLayer, kindColor, worldUnitFor } from './nodes';
 import { EdgeLayer } from './edges';
 import { Interaction, shortestPath, worldRadius } from './interact';
-import { BrainUi, KIND_LABEL, type FilterState, type UiState } from './ui';
+import { BrainUi, KIND_LABEL, VIEW_LABEL, type FilterState, type UiState } from './ui';
 import { LayoutWorkerClient } from './worker';
 import { fetchGraph } from './data';
 import { defaultOptions, runLayout } from './layout';
@@ -32,6 +32,20 @@ const LOW_FPS = 45;
 const HIGH_FPS = 55;
 /** 连续多少帧才切换 LOD（防抖）。 */
 const LOD_WINDOW = 20;
+
+const VIEWS: readonly ViewKind[] = ['semantic', 'hierarchy', 'timeline', 'evidence'];
+
+/**
+ * brain.html?view=<视图>&focus=<节点 id>。
+ * 图页的 iframe、视图切换按钮与记忆详情的「关系图」都靠这两个参数；
+ * 1.0.0 完全不读它们（永远拉 semantic），所以那些按钮看起来"什么都没发生"。
+ */
+export function readLaunchParams(search: string): { view: ViewKind; focus: string } {
+  const params = new URLSearchParams(search);
+  const raw = params.get('view') ?? '';
+  const view = (VIEWS as readonly string[]).includes(raw) ? (raw as ViewKind) : 'semantic';
+  return { view, focus: (params.get('focus') ?? '').trim() };
+}
 
 /** 一次渲染会话。 */
 class BrainApp {
@@ -87,6 +101,12 @@ class BrainApp {
   /** 整帧（主场景 + 标签层）的 draw call / 三角形数。 */
   private lastCalls = 0;
   private lastTriangles = 0;
+  /** 视图切换序号：慢请求晚到时不覆盖较新的视图。 */
+  private viewSeq = 0;
+  /** 最近一次 /api/graph 拉取（自检 / e2e 用）。 */
+  private lastFetch: { view: ViewKind; ok: boolean; nodes: number; error: string | null } | null = null;
+  /** 启动参数里的聚焦节点（找到并选中后清空）。 */
+  private focusId = '';
 
   constructor(mount: HTMLElement) {
     this.mount = mount;
@@ -141,31 +161,60 @@ class BrainApp {
 
   /** 加载数据 + 首次布局。 */
   async boot(): Promise<void> {
+    const launch = readLaunchParams(window.location.search);
+    this.view = launch.view;
+    this.focusId = launch.focus;
     this.setStatus('正在加载图数据…');
-    const outcome = await fetchGraph('semantic', this.filter.scope, 2000);
+    const outcome = await this.load(this.view);
+    this.setStatus(outcome.error ? '已切换到演示数据' : '加载完成，耗时 ' + outcome.tookMs.toFixed(0) + 'ms');
+    await this.rebuild(true);
+    this.applyFocus();
+  }
+
+  /** 拉取某个视图的数据；失败时 fetchGraph 已给出带水印的演示数据。 */
+  private async load(view: ViewKind): Promise<{ error: string | null; tookMs: number }> {
+    const outcome = await fetchGraph(view, this.filter.scope, 2000);
+    this.lastFetch = { view, ok: !outcome.error, nodes: outcome.graph.nodes.length, error: outcome.error };
     this.fullGraph = outcome.graph;
     this.note = outcome.error
       ? '后端 /api/graph 不可用（' + outcome.error + '），当前为内置演示数据'
       : '数据来自 /api/graph';
-    this.setStatus(outcome.error ? '已切换到演示数据' : '加载完成，耗时 ' + outcome.tookMs.toFixed(0) + 'ms');
-    await this.rebuild(true);
+    return { error: outcome.error, tookMs: outcome.tookMs };
   }
 
-  /** 视图切换。 */
+  /** 启动参数 focus=<id>：在当前视图里找到该节点并选中（带相机转场）。 */
+  private applyFocus(): void {
+    const id = this.focusId;
+    if (!id || !this.state) return;
+    const index = this.state.graph.nodes.findIndex((node) => node.id === id);
+    if (index >= 0) {
+      this.focusId = '';
+      this.interaction.select(index, 1, true);
+    } else {
+      this.setStatus('当前视图里没有节点 ' + id);
+    }
+  }
+
+  /**
+   * 视图切换：**每次**都向后端要该视图的数据。
+   * 1.0.0 一旦落到演示数据就不再请求（后端起来了也看不到真数据），
+   * 而在真数据模式下请求失败又会悄悄换成演示图——两种都不如实。
+   */
   async setView(view: ViewKind): Promise<void> {
-    if (this.view === view) return;
+    if (this.view === view && this.state) return;
     this.view = view;
+    const seq = ++this.viewSeq;
     // 进入层级视图时**先**把投影定下来再重建布局：布局的 dims 与相机是一对，
     // 顺序反了会先按 3D 布局建好图、再切成 2D 正交，画面就成了"从正面看的 3D 树"。
     this.dims = view === 'hierarchy' ? (this.dims === 2 ? 2 : 3) : 3;
     this.scene.setProjection(view === 'hierarchy' && this.dims === 2 ? '2d' : 'perspective');
-    if (!this.fullGraph?.demo) {
-      const outcome = await fetchGraph(view, this.filter.scope, 2000);
-      if (outcome.graph.nodes.length) this.fullGraph = outcome.graph;
-    }
+    this.setStatus('正在加载' + (VIEW_LABEL[view] ?? view) + '…');
+    const outcome = await this.load(view);
+    if (seq !== this.viewSeq) return;
     await this.rebuild(true);
     this.interaction.resetSelection();
-    this.setStatus(KIND_LABEL[view] ?? view);
+    this.applyFocus();
+    this.setStatus((VIEW_LABEL[view] ?? view) + (outcome.error ? '（演示数据）' : ''));
   }
 
   /** 2D / 3D 切换（仅 hierarchy）。 */
@@ -628,6 +677,7 @@ class BrainApp {
       view: this.view,
       dims: this.dims,
       demo: this.fullGraph?.demo === true,
+      lastFetch: this.lastFetch,
       layoutMode: this.layoutClient.mode,
       layoutMs: Math.round(this.lastLayoutMs),
       layoutError: this.layoutError,
@@ -993,7 +1043,7 @@ function hierarchyUnit(): number {
 
 /** 证据视图的三层映射。 */
 function evidenceLayer(kind: string): number {
-  if (kind === 'source' || kind === 'document') return 2;
+  if (kind === 'source' || kind === 'document' || kind === 'chunk') return 2;
   if (kind === 'evidence') return 1;
   return 0;
 }

@@ -21,6 +21,8 @@ import type {
 const KNOWN_RELS = new Set([
   'semantic', 'hypernym', 'hyponym', 'part_of', 'instance_of', 'causes', 'contradicts',
   'supports', 'supersedes', 'derived_from', 'mentions', 'temporal_next', 'alias', 'prerequisite',
+  // store.graph 的结构关系（层级 / 时间线 / 证据视图）
+  'contains', 'in_scope', 'evidence', 'document', 'chunk',
 ]);
 
 /** 从若干候选字段里取第一个非空字符串。 */

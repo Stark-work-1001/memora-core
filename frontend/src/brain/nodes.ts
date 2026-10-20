@@ -63,6 +63,10 @@ export const KIND_COLORS: Record<string, string> = {
   evidence: '#ffd166',
   source: '#9aa7b8',
   document: '#b8a2d8',
+  // 后端图视图实际会出现的结构节点（store.graph：hierarchy 的 scope、timeline 的 day、evidence 的 chunk）
+  scope: '#e6c86e',
+  day: '#7aa2c8',
+  chunk: '#a58fc9',
   default: '#8fa3bd',
 };
 

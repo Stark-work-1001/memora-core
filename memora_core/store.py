@@ -69,6 +69,31 @@ EVIDENCE_TRUST: dict[str, float] = {
 }
 AGENT_ONLY_TRUST_CAP = 0.5
 
+# 写入来源（ADR-0002 不得自我认证）。README 的硬规则："只有 agent_asserted 证据的记忆，信任度
+# 不超过 0.5，且绝不自动晋升"。1.0.0 只在 set_status 一处执行它：PATCH、MCP memory_update、
+# 导入、内置 session-distill 工作流都能让 agent 或一份导入文件自己给自己盖"已批准 / 0.99"。
+# 现在每个写入口都说明来源：
+#   user     本机界面 / HTTP（人）       restore  人明确要求"原样恢复自己的备份"
+#   agent    MCP 工具调用               import   交换格式导入（默认）
+#   workflow 工作流落库
+# 不受信来源（agent/import/workflow）：不能创建或迁移到 approved（创建时降为 candidate），
+# 信任度封顶 AGENT_ONLY_TRUST_CAP，声称的证据照录但 verified 恒为 0。批准只能由人来做。
+ORIGINS: tuple[str, ...] = ("user", "restore", "agent", "import", "workflow")
+UNTRUSTED_ORIGINS: frozenset[str] = frozenset({"agent", "import", "workflow"})
+TEXT_FIELDS: frozenset[str] = frozenset({"title", "body", "summary"})
+SECRET_MIRROR_NOTE = "（敏感级别 secret：正文不写入 Markdown 镜像，只保存在 memora.db。）"
+
+
+class NotPermitted(ValueError):
+    """该来源无权做这件事（例如 agent 批准记忆）。ValueError 子类：HTTP 400，MCP -32602。"""
+
+
+def _origin(value: Any) -> str:
+    origin = str(value or "user").strip().lower()
+    if origin not in ORIGINS:
+        raise ValueError("未知写入来源: %s" % value)
+    return origin
+
 BLOCK_TYPES: tuple[str, ...] = (
     "formula", "image", "code", "table", "database", "list", "quote", "derivation",
 )
@@ -146,6 +171,14 @@ def _jsonable(value: Any) -> str:
     return dumps(value if value is not None else {})
 
 
+def _local_midnight(day: str) -> int:
+    """本地日历日 YYYY-MM-DD 的零点（epoch 秒）；解析不了返回 0。"""
+    try:
+        return int(time.mktime(time.strptime(str(day)[:10], "%Y-%m-%d")))
+    except (ValueError, OverflowError):
+        return 0
+
+
 def _epoch(ts: Any) -> int:
     """把 'YYYY-MM-DDTHH:MM:SSZ' / 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD' 解析为 UTC epoch 秒。"""
     if not ts:
@@ -219,6 +252,30 @@ class Store:
             with self._lock:
                 self._conns.append(con)
         return con
+
+    def release_thread(self) -> None:
+        """关闭**当前线程**的连接。短命线程（HTTP 服务每个 TCP 连接一个线程）结束前调用。
+
+        1.0.0 从不关：每个连接线程留下一个打开的 sqlite 连接，20 个请求后 21 个。
+        """
+        con = getattr(self._local, "con", None)
+        if con is None:
+            return
+        self._local.con = None
+        with self._lock:
+            try:
+                self._conns.remove(con)
+            except ValueError:
+                pass
+        try:
+            con.close()
+        except sqlite3.Error:  # pragma: no cover
+            pass
+
+    def open_connections(self) -> int:
+        """本实例当前打开的连接数（诊断与测试用）。"""
+        with self._lock:
+            return len(self._conns)
 
     def close(self) -> None:
         """关闭本实例创建过的所有连接。"""
@@ -320,15 +377,15 @@ class Store:
         if row is not None and row["path"]:
             path = str(row["path"])
             rows = con.execute(
-                "SELECT id FROM scope WHERE path = ? OR path LIKE ? ORDER BY path",
-                (path, path + "/%"),
+                "SELECT id FROM scope WHERE path = ? OR path LIKE ? ESCAPE '\\' ORDER BY path",
+                (path, _escape_like(path) + "/%"),
             ).fetchall()
             ids = [str(r["id"]) for r in rows]
             if ids:
                 return ids
         rows = con.execute(
-            "SELECT id FROM scope WHERE id = ? OR id LIKE ? ORDER BY id",
-            (scope_id, scope_id + "%"),
+            "SELECT id FROM scope WHERE id = ? OR id LIKE ? ESCAPE '\\' ORDER BY id",
+            (scope_id, _escape_like(scope_id) + "%"),
         ).fetchall()
         return [str(r["id"]) for r in rows] or [scope_id]
 
@@ -344,8 +401,13 @@ class Store:
 
     # ------------------------------------------------------------ 记忆
 
-    def add_memory(self, data: dict) -> dict:
-        """新增一条记忆。必填 title/body/kind/scope_id，其余按契约给默认值。"""
+    def add_memory(self, data: dict, origin: str = "user") -> dict:
+        """新增一条记忆。必填 title/body/kind/scope_id，其余按契约给默认值。
+
+        origin 见 ORIGINS：不受信来源请求 approved 时降为 candidate（metadata.requested_status
+        记下原请求），信任度封顶 AGENT_ONLY_TRUST_CAP。
+        """
+        origin = _origin(origin)
         payload = dict(data or {})
         missing = [k for k in REQUIRED_MEMORY_FIELDS if not str(payload.get(k) or "").strip()]
         if missing:
@@ -379,6 +441,16 @@ class Store:
         payload["confidence"] = _clamp01(payload["confidence"], 0.5)
         if not payload.get("tokens"):
             payload["tokens"] = max(1, len(str(payload["body"])) // 3)
+        demoted = False
+        if origin in UNTRUSTED_ORIGINS:
+            metadata = dict(payload["metadata"]) if isinstance(payload["metadata"], dict) else {}
+            if status == "approved":
+                status = payload["status"] = "candidate"
+                metadata["requested_status"] = "approved"
+                demoted = True
+            metadata["origin"] = origin
+            payload["metadata"] = metadata
+            payload["trust"] = min(payload["trust"], AGENT_ONLY_TRUST_CAP)
 
         row = {k: payload.get(k) for k in MEMORY_FIELDS}
         for field in MEMORY_JSON_FIELDS:
@@ -407,7 +479,8 @@ class Store:
             )
             self.audit(
                 "memory.create", mid,
-                detail={"title": row["title"], "kind": kind, "scope": scope_id, "status": status},
+                detail={"title": row["title"], "kind": kind, "scope": scope_id, "status": status,
+                        "origin": origin, "demoted": demoted},
             )
         self._mirror(mid)
         return self.get_memory(mid) or {}
@@ -429,13 +502,22 @@ class Store:
         item["documents"] = self._memory_documents(mid)
         return item
 
-    def update_memory(self, mid: str, patch: dict) -> dict:
-        """局部更新记忆；状态变更仍然走状态机校验。"""
+    def update_memory(self, mid: str, patch: dict, origin: str = "user") -> dict:
+        """局部更新记忆；状态变更走状态机。先校验全部字段、再在**一个**事务里写入。
+
+        1.0.0 先提交状态迁移、再校验其它字段：kind 非法时返回 400，但状态已经改了。
+        不受信来源不能把状态改成 approved，信任度只能调低到 AGENT_ONLY_TRUST_CAP 以内。
+        正文变化时作废该记忆的缓存向量（否则检索仍按旧文本的向量命中）。
+        """
+        origin = _origin(origin)
         payload = {k: v for k, v in dict(patch or {}).items() if k in MEMORY_FIELDS}
         payload.pop("id", None)
         status = payload.pop("status", None)
-        if status is not None and str(status).strip():
-            self.set_status(mid, str(status).strip())
+        status = str(status).strip() if status is not None and str(status).strip() else None
+        if status is not None and status not in STATUSES:
+            raise ValueError("未知记忆状态: %s" % status)
+        if status == "approved" and origin in UNTRUSTED_ORIGINS:
+            raise NotPermitted("来源 %s 不能批准记忆：批准只能由人在界面里完成（%s）" % (origin, mid))
         fields: dict[str, Any] = {}
         for key, value in payload.items():
             if key == "recorded_at":
@@ -448,20 +530,53 @@ class Store:
                 fields[key] = 1 if value else 0
             elif key == "kind" and str(value) not in MEMORY_KINDS:
                 raise ValueError("未知记忆类型: %s" % value)
+            elif key == "sensitivity" and str(value) not in SENSITIVITIES:
+                raise ValueError("未知敏感级别: %s" % value)
             else:
                 fields[key] = value
+        if origin in UNTRUSTED_ORIGINS and "trust" in fields:
+            fields["trust"] = min(fields["trust"], AGENT_ONLY_TRUST_CAP)
         fields["updated_at"] = now()
         with self._txn() as con:
-            if not con.execute("SELECT 1 FROM memory WHERE id = ?", (mid,)).fetchone():
+            row = con.execute("SELECT * FROM memory WHERE id = ?", (mid,)).fetchone()
+            if row is None:
                 raise KeyError("记忆不存在: %s" % mid)
+            if status is not None:
+                self._transition(con, row, status, "", origin)
             assignments = ", ".join("%s = ?" % k for k in fields)
             con.execute(
                 "UPDATE memory SET %s WHERE id = ?" % assignments,
                 tuple(fields[k] for k in fields) + (mid,),
             )
-            self.audit("memory.update", mid, detail={"fields": sorted(fields)})
+            if TEXT_FIELDS & set(fields):
+                con.execute("DELETE FROM vector WHERE owner_kind = 'memory' AND owner_id = ?",
+                            (mid,))
+            self._apply_trust_ceiling(con, mid)
+            self.audit("memory.update", mid, detail={"fields": sorted(fields), "origin": origin})
         self._mirror(mid)
         return self.get_memory(mid) or {}
+
+    def _trust_ceiling(self, con: sqlite3.Connection, mid: str) -> float | None:
+        """信任度上限；None 表示不封顶。
+
+        * 证据全是 agent_asserted → AGENT_ONLY_TRUST_CAP（README 硬规则，对谁都成立）；
+        * 不受信来源创建、且还没被人批准 → AGENT_ONLY_TRUST_CAP。
+        """
+        kinds = [str(r["kind"]) for r in con.execute(
+            "SELECT kind FROM evidence WHERE memory_id = ?", (mid,)).fetchall()]
+        if kinds and all(k == "agent_asserted" for k in kinds):
+            return AGENT_ONLY_TRUST_CAP
+        row = con.execute("SELECT status, metadata FROM memory WHERE id = ?", (mid,)).fetchone()
+        if row is not None and str(row["status"]) != "approved":
+            origin = str((loads(row["metadata"], {}) or {}).get("origin") or "user")
+            if origin in UNTRUSTED_ORIGINS:
+                return AGENT_ONLY_TRUST_CAP
+        return None
+
+    def _apply_trust_ceiling(self, con: sqlite3.Connection, mid: str) -> None:
+        ceiling = self._trust_ceiling(con, mid)
+        if ceiling is not None:
+            con.execute("UPDATE memory SET trust = min(trust, ?) WHERE id = ?", (ceiling, mid))
 
     def delete_memory(self, mid: str, hard: bool = False) -> dict:
         """软删除＝标记 archived（保留审计链）；
@@ -472,6 +587,15 @@ class Store:
                 raise KeyError("记忆不存在: %s" % mid)
             if hard:
                 con.execute("DELETE FROM memory WHERE id = ?", (mid,))
+                # 这些表没有指向 memory 的外键，1.0.0 硬删除后会留下孤儿行
+                con.execute("DELETE FROM edge WHERE (src = ? AND src_kind = 'memory') "
+                            "OR (dst = ? AND dst_kind = 'memory')", (mid, mid))
+                con.execute("DELETE FROM vector WHERE owner_kind = 'memory' AND owner_id = ?",
+                            (mid,))
+                con.execute("DELETE FROM review_log WHERE memory_id = ?", (mid,))
+                con.execute("DELETE FROM candidate WHERE memory_id = ? OR target_id = ?",
+                            (mid, mid))
+                con.execute("DELETE FROM conflict WHERE a_id = ? OR b_id = ?", (mid, mid))
                 self.audit("memory.delete", mid, detail={"hard": True})
                 result = {"id": mid, "hard": True, "status": "deleted"}
             else:
@@ -489,38 +613,49 @@ class Store:
         result["at"] = now()
         return result
 
-    def set_status(self, mid: str, status: str, note: str = "") -> dict:
-        """状态机迁移；非法迁移抛 ValueError（candidate→superseded 就是非法）。"""
+    def set_status(self, mid: str, status: str, note: str = "", origin: str = "user") -> dict:
+        """状态机迁移；非法迁移抛 ValueError（candidate→superseded 就是非法）。
+        不受信来源迁移到 approved 抛 NotPermitted。"""
+        origin = _origin(origin)
         target = (status or "").strip()
         if target not in STATUSES:
             raise ValueError("未知记忆状态: %s" % target)
+        if target == "approved" and origin in UNTRUSTED_ORIGINS:
+            raise NotPermitted("来源 %s 不能批准记忆：批准只能由人在界面里完成（%s）" % (origin, mid))
         with self._txn() as con:
             row = con.execute("SELECT * FROM memory WHERE id = ?", (mid,)).fetchone()
             if row is None:
                 raise KeyError("记忆不存在: %s" % mid)
-            current = str(row["status"])
-            if target != current and target not in STATUS_TRANSITIONS.get(current, frozenset()):
-                raise ValueError("非法状态迁移: %s → %s（%s）" % (current, target, mid))
-            trust = _as_float(row["trust"], 0.5)
-            capped = False
-            if target == "approved" and trust > AGENT_ONLY_TRUST_CAP:
-                kinds = [str(r["kind"]) for r in con.execute(
-                    "SELECT kind FROM evidence WHERE memory_id = ?", (mid,)
-                ).fetchall()]
-                if kinds and all(k == "agent_asserted" for k in kinds):
-                    trust = AGENT_ONLY_TRUST_CAP  # 架构 §3.3：只有 agent_asserted 证据时封顶
-                    capped = True
-            con.execute(
-                "UPDATE memory SET status = ?, trust = ?, updated_at = ? WHERE id = ?",
-                (target, trust, now(), mid),
-            )
-            self.audit(
-                "memory.set_status", mid,
-                detail={"from": current, "to": target, "note": note, "trust_capped": capped},
-            )
+            self._transition(con, row, target, note, origin)
         self._mirror(mid)
         updated = self.get_memory(mid)
         return updated if updated is not None else {"id": mid, "status": target}
+
+    def _transition(self, con: sqlite3.Connection, row: sqlite3.Row, target: str, note: str,
+                    origin: str) -> None:
+        """在调用方的事务里执行一次状态迁移（校验 + 封顶 + 审计）。"""
+        mid = str(row["id"])
+        current = str(row["status"])
+        if target != current and target not in STATUS_TRANSITIONS.get(current, frozenset()):
+            raise ValueError("非法状态迁移: %s → %s（%s）" % (current, target, mid))
+        trust = _as_float(row["trust"], 0.5)
+        capped = False
+        if target == "approved" and trust > AGENT_ONLY_TRUST_CAP:
+            kinds = [str(r["kind"]) for r in con.execute(
+                "SELECT kind FROM evidence WHERE memory_id = ?", (mid,)
+            ).fetchall()]
+            if kinds and all(k == "agent_asserted" for k in kinds):
+                trust = AGENT_ONLY_TRUST_CAP  # 架构 §3.3：只有 agent_asserted 证据时封顶
+                capped = True
+        con.execute(
+            "UPDATE memory SET status = ?, trust = ?, updated_at = ? WHERE id = ?",
+            (target, trust, now(), mid),
+        )
+        self.audit(
+            "memory.set_status", mid,
+            detail={"from": current, "to": target, "note": note, "trust_capped": capped,
+                    "origin": origin},
+        )
 
     def list_memories(self, filters: dict | None = None) -> dict:
         """分页查询记忆，返回 {items,total,limit,offset,query}；items 带 snippet。
@@ -684,12 +819,17 @@ class Store:
 
     # ------------------------------------------------------------ 证据 / 块
 
-    def add_evidence(self, mid: str, data: dict) -> dict:
+    def add_evidence(self, mid: str, data: dict, origin: str = "user") -> dict:
         """新增证据；trust 缺省取架构 §3.3 的 kind 权重，并同步 source_count。"""
         payload = dict(data or {})
         kind = str(payload.get("kind") or "").strip()
         if kind not in EVIDENCE_KINDS:
             raise ValueError("未知证据类型: %s" % kind)
+        origin = _origin(origin)
+        if origin in UNTRUSTED_ORIGINS:
+            # 不受信来源声称的证据照录（种类、引文），但不能自称"已核验"
+            payload["verified"] = False
+            payload["verifier"] = None
         eid = str(payload.get("id") or "").strip() or "e-" + uuid.uuid4().hex[:12]
         trust = _clamp01(payload.get("trust"), EVIDENCE_TRUST.get(kind, 0.5))
         created = str(payload.get("created_at") or now())
@@ -720,6 +860,7 @@ class Store:
                 "UPDATE memory SET source_count = ?, trust = ?, updated_at = ? WHERE id = ?",
                 (len(kinds), mem_trust, now(), mid),
             )
+            self._apply_trust_ceiling(con, mid)
             self.audit("evidence.add", mid,
                        detail={"evidence_id": eid, "kind": kind, "trust": trust})
         self._mirror(mid)
@@ -1079,7 +1220,8 @@ class Store:
     def _graph_timeline(
         self, scope_id: str | None, cap: int
     ) -> tuple[list[dict], list[dict], bool]:
-        """时间线：按 recorded_at 的 UTC 日期分桶，桶内按时间串成 temporal_next。"""
+        """时间线：按 recorded_at 的**本地**日历日分桶（与日记页一致），桶内按时间串成
+        temporal_next。日节点的 t 是本地零点。"""
         con = self.con
         mems, truncated = self._graph_memories(con, scope_id, cap, "m.recorded_at DESC, m.id")
         nodes: dict[str, dict] = {}
@@ -1088,12 +1230,12 @@ class Store:
         for row in mems:
             mid = str(row["id"])
             stamp = str(row["recorded_at"] or "")
-            bucket = stamp[:10] or "0000-00-00"
+            bucket = dbmod.local_day(stamp) if stamp else "0000-00-00"
             day_id = "day:" + bucket
             if day_id not in nodes:
                 nodes[day_id] = {
                     "id": day_id, "kind": "day", "label": bucket, "bucket": bucket,
-                    "t": _epoch(bucket), "depth": 0,
+                    "t": _local_midnight(bucket), "depth": 0,
                 }
             nodes[mid] = {
                 "id": mid, "kind": "memory", "label": row["title"] or mid,
@@ -1356,48 +1498,10 @@ class Store:
             item[field] = loads(item.get(field), {}) or {}
         return item
 
-    def decide_candidate(
-        self,
-        cid: str,
-        action: str,
-        target_id: str | None,
-        judge: dict,
-        status: str,
-    ) -> dict:
-        """记录候选裁决；applied/auto_applied 时把动作落到记忆状态机。"""
-        verdict = str(status or "pending").strip()
-        if verdict not in CANDIDATE_STATUSES:
-            raise ValueError("未知候选状态: %s" % verdict)
-        with self._txn() as con:
-            row = con.execute("SELECT * FROM candidate WHERE id = ?", (cid,)).fetchone()
-            if row is None:
-                raise KeyError("候选不存在: %s" % cid)
-            con.execute(
-                "UPDATE candidate SET action = ?, target_id = ?, judge = ?, status = ?, "
-                "decided_at = ? WHERE id = ?",
-                (action or row["action"], target_id, _jsonable(judge or {}), verdict, now(), cid),
-            )
-            self.audit("candidate.decide", cid,
-                       detail={"action": action, "status": verdict, "target": target_id})
-            memory_id = row["memory_id"]
-            if verdict in ("applied", "auto_applied") and memory_id:
-                if action == "supersede" and target_id:
-                    con.execute(
-                        "UPDATE memory SET status = 'superseded', superseded_by = ?, "
-                        "updated_at = ? WHERE id = ?", (target_id, now(), memory_id),
-                    )
-                elif action == "merge" and target_id:
-                    con.execute(
-                        "UPDATE memory SET status = 'merged', merged_into = ?, "
-                        "updated_at = ? WHERE id = ?", (target_id, now(), memory_id),
-                    )
-                elif action in ("add", "update"):
-                    con.execute(
-                        "UPDATE memory SET status = 'approved', updated_at = ? WHERE id = ?",
-                        (now(), memory_id),
-                    )
-            row = con.execute("SELECT * FROM candidate WHERE id = ?", (cid,)).fetchone()
-        return self._candidate_dict(row) if row else {"id": cid}
+    # 1.1.0 删除了 decide_candidate：它没有任何生产调用方，却用原生 SQL 改记忆状态、绕过状态机
+    # （candidate → superseded 本是非法迁移）；auto_applied 的 add/update 会把记忆自动批准
+    # （违反 ADR-0002）；supersede 的方向还是反的（把新候选标成"被旧目标取代"）。
+    # 采纳裁决请走 set_status / update_memory（带 origin），见 workflows 的 persist 节点。
 
     def add_conflict(self, data: dict) -> dict:
         """登记冲突（重复/矛盾/过期/作用域冲突/来源冲突/孤立）。"""
@@ -1524,6 +1628,11 @@ class Store:
             memory = self.get_memory(mid)
             if memory is None:
                 return
+            if str(memory.get("sensitivity") or "") == "secret":
+                # Markdown 镜像是普通文件，常被同步盘/笔记软件带走：secret 只留在 memora.db。
+                memory = dict(memory, body=SECRET_MIRROR_NOTE, summary="", didactic={},
+                              evidence=[dict(e, quote="") for e in memory.get("evidence") or []],
+                              blocks=[])
             self.vault.write_memory(
                 memory, memory.get("evidence") or [], memory.get("blocks") or []
             )

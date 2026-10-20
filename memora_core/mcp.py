@@ -21,12 +21,13 @@ import traceback
 import uuid
 from typing import Any, Callable
 
+from . import __version__
 from . import agents as agents_mod
 from . import db as _db
 from . import exchange as exchange_mod
 
 SERVER_NAME = "memora-core"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = __version__
 PROTOCOL_VERSION = "2024-11-05"
 
 PARAM_ERROR = -32602
@@ -174,7 +175,7 @@ def _t_capture(ctx: ToolContext) -> dict:
         "title": title, "body": text, "status": "candidate", "trust": 0.4,
         "importance": float(ctx.get("importance") or 0.4),
         "metadata": {"tags": tags, "source": "mcp", "capture": True},
-    })
+    }, origin="agent")
     return {"id": memory.get("id"), "title": memory.get("title"),
             "status": memory.get("status"), "kind": memory.get("kind"),
             "scope": memory.get("scope_id")}
@@ -201,14 +202,14 @@ def _t_remember(ctx: ToolContext) -> dict:
         "status": "candidate", "trust": trust_map[evidence_kind],
         "importance": float(ctx.get("importance") or 0.5),
         "metadata": {"tags": list(ctx.get("tags") or []), "source": "mcp"},
-    })
+    }, origin="agent")
     quote = ctx.get("quote") or ctx.get("evidence_quote") or ""
     evidence = None
     if quote:
         try:
             evidence = ctx.store.add_evidence(memory["id"], {
                 "kind": evidence_kind, "quote": str(quote),
-                "uri": ctx.get("uri"), "note": "mcp memory_remember"})
+                "uri": ctx.get("uri"), "note": "mcp memory_remember"}, origin="agent")
         except Exception as exc:  # noqa: BLE001 - 证据落库失败不放弃记忆
             evidence = {"error": str(exc)}
     return {"id": memory.get("id"), "status": memory.get("status"),
@@ -227,7 +228,7 @@ def _t_recall(ctx: ToolContext) -> dict:
     return {"query": query, "scope": scope, "agent": ctx.agent_id,
             "hits": result.get("hits") or [], "degraded": result.get("degraded") or [],
             "total": result.get("total"), "took_ms": result.get("took_ms"),
-            "strategy": result.get("strategy")}
+            "strategy": result.get("strategy"), **_retrieval_meta(result)}
 
 
 def _t_search(ctx: ToolContext) -> dict:
@@ -239,7 +240,14 @@ def _t_search(ctx: ToolContext) -> dict:
     result, _ = _retrieve(ctx, query, scope, limit, strategy, plain=True)
     return {"query": query, "scope": scope, "strategy": result.get("strategy") or strategy,
             "hits": result.get("hits") or [], "total": result.get("total"),
-            "degraded": result.get("degraded") or [], "took_ms": result.get("took_ms")}
+            "degraded": result.get("degraded") or [], "took_ms": result.get("took_ms"),
+            **_retrieval_meta(result)}
+
+
+def _retrieval_meta(result: dict) -> dict:
+    """检索实际跑了什么（附加字段）：agent 据此判断"相似"是不是语义的。"""
+    return {key: result.get(key) for key in ("channels_used", "vector_model", "semantic",
+                                             "reranked", "score_kind") if key in result}
 
 
 def _retrieve(ctx: ToolContext, query: str, scope: str, limit: int,
@@ -308,12 +316,16 @@ def _t_update(ctx: ToolContext) -> dict:
         meta = dict(memory.get("metadata") or {})
         meta["tags"] = list(patch.pop("tags") or [])
         patch["metadata"] = meta
-    return ctx.store.update_memory(mid, patch)
+    # agent 通道：不能自己批准，信任度只能调低（store.NotPermitted → -32602）
+    return ctx.store.update_memory(mid, patch, origin="agent")
 
 
 def _t_forget(ctx: ToolContext) -> dict:
     mid = str(ctx.require("id") or "").strip()
     hard = bool(ctx.get("hard"))
+    if hard and str(ctx.get("confirm") or "").strip() != mid:
+        # MEMORY-MODEL §7：物理删除需显式同意。HTTP DELETE 一直要求 confirm=<id>，MCP 1.0.0 没有。
+        raise McpError(PARAM_ERROR, "物理删除不可恢复：需要同时传 confirm=<记忆 id> 表示明确同意")
     return ctx.store.delete_memory(mid, hard=hard)
 
 
@@ -336,7 +348,7 @@ def _t_evidence(ctx: ToolContext) -> dict:
                "note": ctx.get("note"), "verified": bool(ctx.get("verified"))}
     if ctx.get("trust") is not None:
         payload["trust"] = float(ctx.get("trust"))
-    return ctx.store.add_evidence(mid, payload)
+    return ctx.store.add_evidence(mid, payload, origin="agent")
 
 
 def _t_review(ctx: ToolContext) -> dict:
@@ -433,7 +445,7 @@ def _t_session_end(ctx: ToolContext) -> dict:
     turns = ctx.get("turns")
     if isinstance(turns, str):
         turns = _loads(turns, [])
-    return agents_mod.end_session(ctx.store, ctx.agent_id, external, turns=turns)
+    return agents_mod.end_session(ctx.store, ctx.agent_id, external, turns=turns, gw=ctx.gw)
 
 
 def _t_agent_status(ctx: ToolContext) -> dict:
@@ -513,8 +525,10 @@ def _t_import(ctx: ToolContext) -> dict:
         raise McpError(PARAM_ERROR, "缺少必填参数: jsonl")
     if isinstance(text, list):
         text = "\n".join(_dumps(item) for item in text)
+    # agent 通道的导入永远按 cap 策略（不能借导入自我认证，ADR-0002）
     return exchange_mod.import_jsonl(ctx.store, str(text), agent_id=ctx.agent_id,
-                                     scope=ctx.scope(), dry_run=bool(ctx.get("dry_run")))
+                                     scope=ctx.scope(), dry_run=bool(ctx.get("dry_run")),
+                                     trust="cap")
 
 
 def _t_health(ctx: ToolContext) -> dict:
@@ -523,27 +537,37 @@ def _t_health(ctx: ToolContext) -> dict:
         db_health = _db.health(con)
     except Exception as exc:  # noqa: BLE001
         db_health = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
-    models_health: Any = {"configured": False, "degraded": True, "roles": {}}
+    models_health: Any = {}
+    degraded: list[str] = []
     gw = ctx.gw or _make_gateway(ctx.store)
-    if gw is not None:
+    if gw is None:
+        degraded.append("models: 模型网关不可用")
+    else:
         try:
             models_health = gw.health()
         except Exception as exc:  # noqa: BLE001
-            models_health = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+            models_health = {}
+            degraded.append("models: %s: %s" % (type(exc).__name__, exc))
     try:
         rows = agents_mod.agent_status(ctx.store)
         agents_summary = {"total": len(rows),
                           "online": [r["id"] for r in rows if r.get("status") == "online"]}
     except Exception:  # noqa: BLE001
         agents_summary = {"total": 0, "online": []}
-    degraded: list[str] = []
     if not db_health.get("ok", False):
-        degraded.append("db: 完整性检查未通过")
-    roles = (models_health or {}).get("roles") or {}
-    for role, item in roles.items():
+        missing = ((db_health.get("tables") or {}).get("missing")) or []
+        degraded.append("db: " + ("缺表 " + ",".join(missing) if missing
+                                  else str(db_health.get("error") or "不可用")))
+    # gw.health() 返回 {role: {...}}。1.0.0 在这里读 ["roles"]（永远是空），所以没配任何模型时
+    # memory_health 仍报 degraded=[]——违反 AGENTS.md §6 与降级契约。
+    roles = models_health if isinstance(models_health, dict) else {}
+    if isinstance(roles.get("roles"), dict):
+        roles = roles["roles"]
+    for role, item in sorted(roles.items()):
         if isinstance(item, dict) and (item.get("degraded") or not item.get("ok", True)):
             degraded.append("model:%s 不可用" % role)
-    return {"ok": bool(db_health.get("ok")) and not degraded,
+    # ok = 中枢本身可用（数据库正常）。模型不可用只进 degraded：AGENTS.md §6 要求此时照常使用。
+    return {"ok": bool(db_health.get("ok")),
             "version": SERVER_VERSION, "protocol": PROTOCOL_VERSION,
             "db": db_health, "models": models_health, "agents": agents_summary,
             "degraded": degraded, "agent_id": ctx.agent_id}
@@ -600,7 +624,13 @@ TOOL_SPECS: dict[str, dict] = {
         inputSchema=_schema({"text": {"type": "string"},
                              "title": {"type": "string"},
                              "kind": {"type": "string", "enum": list(MEMORY_KINDS)},
-                             "scope": _STR_SCOPE},
+                             "scope": _STR_SCOPE,
+                             "evidence_kind": {"type": "string",
+                                               "enum": ["agent_asserted", "user_stated",
+                                                        "tool_output", "code_run", "document",
+                                                        "verification", "web", "derived"]},
+                             "quote": {"type": "string"},
+                             "uri": {"type": "string"}},
                             ["text"])),
     "memory_recall": dict(
         description="语义 + 全文 + 图混合召回（写 recall_log 并刷新在场）。",
@@ -621,7 +651,8 @@ TOOL_SPECS: dict[str, dict] = {
                           inputSchema=_schema({"id": {"type": "string"}}, ["id"])),
     "memory_forget": dict(description="删除记忆（默认软删除 archived，hard=true 物理删除）",
                           inputSchema=_schema({"id": {"type": "string"},
-                                               "hard": {"type": "boolean"}}, ["id"])),
+                                               "hard": {"type": "boolean"},
+                                               "confirm": {"type": "string"}}, ["id"])),
     "memory_relate": dict(description="建立关系边（含 contradicts / supersedes）",
                           inputSchema=_schema({"src": {"type": "string"},
                                                "dst": {"type": "string"},
@@ -786,7 +817,21 @@ def initialize_result(client_info: dict | None = None) -> dict:
 
 def handle_rpc(store, gw, body: dict, headers: dict | None = None,
                agent_id: str = "unknown") -> dict | None:
-    """处理一个 JSON-RPC 对象；通知类返回 None（不回帧）。"""
+    """处理一个 JSON-RPC 对象；通知类返回 None（不回帧）。
+
+    任何异常都变成 JSON-RPC 错误帧：1.0.0 里一帧 params._meta 或 params.clientInfo 是字符串
+    就抛 AttributeError，stdio 服务进程直接退出（HTTP 上是非 JSON-RPC 的 500）。
+    """
+    try:
+        return _handle_rpc(store, gw, body, headers, agent_id)
+    except Exception as exc:  # noqa: BLE001
+        _stderr(traceback.format_exc())
+        msg_id = body.get("id") if isinstance(body, dict) else None
+        return _rpc_err(msg_id, INTERNAL_ERROR, "%s: %s" % (type(exc).__name__, exc))
+
+
+def _handle_rpc(store, gw, body: dict, headers: dict | None = None,
+                agent_id: str = "unknown") -> dict | None:
     if not isinstance(body, dict):
         return _rpc_err(None, INVALID_REQUEST, "JSON-RPC 消息必须是对象")
     method = body.get("method")
@@ -797,7 +842,8 @@ def handle_rpc(store, gw, body: dict, headers: dict | None = None,
         params = {}
 
     if method == "initialize":
-        client = params.get("clientInfo") or {}
+        client = params.get("clientInfo")
+        client = client if isinstance(client, dict) else {}
         who = str(client.get("name") or agent_id or "unknown")
         try:
             agents_mod.heartbeat(store, who, {"source": "mcp", "protocol": "mcp-stdio",
@@ -818,7 +864,9 @@ def handle_rpc(store, gw, body: dict, headers: dict | None = None,
         args = params.get("arguments") or {}
         if not isinstance(args, dict):
             return _rpc_err(msg_id, PARAM_ERROR, "tools/call 的 arguments 必须是对象")
-        who = str(params.get("agentId") or params.get("_meta", {}).get("agentId") or agent_id)
+        meta = params.get("_meta")
+        meta = meta if isinstance(meta, dict) else {}
+        who = str(params.get("agentId") or meta.get("agentId") or agent_id)
         outcome = dispatch(store, gw, name, args, agent_id=who)
         if not outcome.get("ok"):
             err = outcome.get("error") or {}

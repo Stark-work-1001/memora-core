@@ -59,9 +59,8 @@ class Paths:
         self.backups = self.root / "backups"
         self.logs = self.root / "logs"
         self.tmp = self.root / "tmp"
-        self.models = self.root / "models.json"
-        self.secrets = self.root / "secrets.bin"
-        self.settings = self.root / "settings.json"
+        # 1.1.0 删去了 models.json / secrets.bin / settings.json：从来没有代码读写它们（档位在
+        # model_profile 表、密钥在 secret 表 + master.key、设置在 setting 表），只出现在文档里。
 
     def ensure(self) -> "Paths":
         for rel in SUBDIRS:

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import time
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
@@ -487,9 +488,39 @@ def ingest_directory(store, path, *, scope="global", pattern="**/*.md") -> dict:
 # inbox 监听
 # ============================================================
 
-def watch_inbox(store, scope="global", inbox: str | os.PathLike | None = None) -> dict:
-    """扫描 data/inbox/，吸收后移动到 processed/（失败移 failed/）。"""
+def inbox_ready(root: Path, settle_seconds: float = 0.0) -> list[Path]:
+    """收件箱里可以吸收的文件：普通文件、非隐藏、且 settle_seconds 内没有再被修改
+    （正在复制中的大文件不碰）。"""
+    if not root.exists():
+        return []
+    settle = max(0.0, float(settle_seconds))
+    cutoff = time.time() - settle
+    ready = []
+    for entry in sorted(root.iterdir()):
+        if entry.name in ("processed", "failed") or entry.name.startswith(".") or not entry.is_file():
+            continue
+        if settle <= 0:
+            ready.append(entry)  # 不设静置期就不看时间：刚写的文件的 mtime 可能比 time.time() 还晚几毫秒
+            continue
+        try:
+            if entry.stat().st_mtime <= cutoff:
+                ready.append(entry)
+        except OSError:
+            continue
+    return ready
+
+
+def watch_inbox(store, scope="global", inbox: str | os.PathLike | None = None,
+                settle_seconds: float = 0.0) -> dict:
+    """扫描 data/inbox/，吸收后移动到 processed/（失败移 failed/）。
+
+    settle_seconds：只处理这么久没再变化的文件（服务端的自动吸收用 5 秒）。没有可吸收的文件时
+    直接返回，不写审计（服务端每 10 秒查一次，不能每次都留一条空记录）。
+    """
     root = Path(inbox).expanduser() if inbox else (_data_root(store) / "inbox")
+    if not inbox_ready(root, settle_seconds):
+        return {"inbox": str(root), "absorbed": 0, "errors": [], "items": [],
+                "processed_dir": str(root / "processed"), "failed_dir": str(root / "failed")}
     processed = root / "processed"
     failed = root / "failed"
     root.mkdir(parents=True, exist_ok=True)
@@ -497,11 +528,7 @@ def watch_inbox(store, scope="global", inbox: str | os.PathLike | None = None) -
     failed.mkdir(parents=True, exist_ok=True)
     absorbed: list[dict] = []
     errors: list[dict] = []
-    for entry in sorted(root.iterdir()):
-        if entry.name in ("processed", "failed") or entry.name.startswith("."):
-            continue
-        if not entry.is_file():
-            continue
+    for entry in inbox_ready(root, settle_seconds):
         if entry.suffix.lower() not in SUPPORTED_EXTS:
             errors.append({"path": str(entry), "error": "不支持的类型: %s" % entry.suffix})
             _move(entry, failed)

@@ -48,23 +48,31 @@ MAX_REQUESTS_PER_CONN = 200         # 单连接请求数上限（keep-alive 复�
 HEARTBEAT_SECONDS = 15.0            # SSE 心跳注释行间隔
 SSE_POLL_SECONDS = 0.5              # SSE 轮询切片（用于及时发现客户端断开）
 SSE_BACKLOG = 5                     # SSE 建连时补发的历史事件条数
+HEALTH_TTL = 5.0                    # /api/health 行数缓存秒数
+CHANGE_POLL_SECONDS = 2.0           # 外部写入探测（PRAGMA data_version）的轮询间隔
+INBOX_POLL_SECONDS = 10.0           # data/inbox/ 自动吸收的检查间隔
+INBOX_SETTLE_SECONDS = 5.0          # 文件这么久没再变化才吸收（避开复制到一半的大文件）
+CHANGE_QUIET_SECONDS = 3.0          # 这段时间内已有事件就不补发（多半是本进程自己的写入）
 SSE_MAX_LIFETIME = 3600.0           # 单条 SSE 连接最长存活（防止忘记关闭）
 STATIC_DIR = package_dir() / "static"
 STATIC_INDEX = "index.html"
 STATIC_BRAIN = "brain.html"
 
 # 统一安全响应头。CSP 与前端 index.html 里的 meta 保持一致（同源、无 CDN）。
+# frame-ancestors 必须是 'self'：图谱页用同源 iframe 嵌 /brain.html。1.0.0 写的是 'none'
+# + X-Frame-Options: DENY，浏览器因此拒绝渲染那个 iframe，图谱页永远是空白。
+# 'self' 仍然挡住第三方站点嵌入（点击劫持防护不变）。
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
-        "worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; "
+        "worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'none'; "
         "form-action 'self'; object-src 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
-    "X-Frame-Options": "DENY",
+    "X-Frame-Options": "SAMEORIGIN",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
 }
 
@@ -221,6 +229,72 @@ class Runtime:
         self._gw: Any = None
         self._gw_error: str | None = None
         self._active_lock = threading.Lock()
+        # /api/health 的数据库部分：行数短时缓存；完整性只在后台跑一次 quick_check，
+        # 或在 ?deep=1 时同步跑 integrity_check。结果是 (结论, 时间, 方式)。
+        self._health_lock = threading.Lock()
+        self._health_cache: tuple[float, dict] | None = None
+        self._integrity: tuple[str, str, str] | None = None
+        self._integrity_started = False
+        self.gzip_cache: dict[tuple[str, int, int], bytes] = {}
+        self._watcher_started = False
+
+    def start_change_watcher(self) -> None:
+        """有界面在听（SSE）时，后台盯住数据库的 data_version：别的**进程**写库（mcp-stdio 里的
+        agent、命令行导入）后补发一个 memory 事件，让界面刷新。
+
+        1.0.0 只有本服务的 HTTP 写接口发事件，而页面不轮询、只听 SSE：agent 经 stdio MCP 写入后
+        界面一直显示旧数据。data_version 对"任何其它连接的提交"都会变，所以本进程自己的写入
+        （紧跟着就有事件）在安静期内不重复补发。
+        """
+        with self._health_lock:
+            if self._watcher_started:
+                return
+            self._watcher_started = True
+
+        def work() -> None:
+            try:
+                con = dbmod.connect(self.paths.db)
+            except Exception:  # noqa: BLE001
+                return
+            try:
+                last = con.execute("PRAGMA data_version").fetchone()[0]
+                while not self.shutdown.wait(CHANGE_POLL_SECONDS):
+                    current = con.execute("PRAGMA data_version").fetchone()[0]
+                    if current == last:
+                        continue
+                    last = current
+                    if self.sse_clients <= 0:
+                        continue
+                    latest = eventbus.recent(1)
+                    if latest and time.time() - float(latest[-1].get("ts") or 0) < CHANGE_QUIET_SECONDS:
+                        continue
+                    _emit("memory", {"action": "external", "source": "data_version"})
+            except Exception:  # noqa: BLE001 - 探测失败只是少一次刷新
+                pass
+            finally:
+                con.close()
+
+        threading.Thread(target=work, name="memora-change-watch", daemon=True).start()
+
+    def start_inbox_watcher(self) -> None:
+        """data/inbox/ 自动吸收。OPERATIONS.md 一直写着"把文件丢这里会被自动吸收"，但 1.0.0 里
+        没有任何东西调用 ingest.watch_inbox。吸收后文件移到 inbox/processed/（失败移 failed/）。"""
+
+        def work() -> None:
+            while not self.shutdown.wait(INBOX_POLL_SECONDS):
+                try:
+                    ingest = self.module("ingest")
+                    if not ingest.inbox_ready(self.paths.inbox, INBOX_SETTLE_SECONDS):
+                        continue
+                    result = ingest.watch_inbox(self.store(), inbox=self.paths.inbox,
+                                                settle_seconds=INBOX_SETTLE_SECONDS)
+                    if result.get("absorbed") or result.get("errors"):
+                        _emit("memory", {"action": "inbox", "absorbed": result.get("absorbed", 0),
+                                         "errors": len(result.get("errors") or [])})
+                except Exception as exc:  # noqa: BLE001 - 收件箱出错不能拖垮服务
+                    self.log_line("inbox watcher: %s: %s" % (type(exc).__name__, exc))
+
+        threading.Thread(target=work, name="memora-inbox", daemon=True).start()
 
     # -- 模块 -----------------------------------------------------
     def module(self, name: str):
@@ -270,6 +344,57 @@ class Runtime:
         db_ok, db_error = self.db_probe()
         out["db"] = {"ok": db_ok, "error": db_error}
         return out
+
+    def db_health(self, deep: bool = False, counts: bool = True) -> dict:
+        """数据库健康（见 db.health）。counts 结果缓存 HEALTH_TTL 秒；deep 总是现查。"""
+        now_mono = time.monotonic()
+        if not deep and counts:
+            with self._health_lock:
+                cached = self._health_cache
+                if cached is not None and now_mono - cached[0] < HEALTH_TTL:
+                    return dict(cached[1])
+        con = dbmod.connect(self.paths.db)
+        try:
+            info = dbmod.health(con, deep=deep, counts=counts)
+        finally:
+            con.close()
+        with self._health_lock:
+            if deep:
+                self._integrity = (str(info.get("integrity")), _iso(), "integrity_check")
+            if counts:
+                self._health_cache = (now_mono, dict(info))
+        if not deep:
+            self._start_integrity_check()
+        return info
+
+    def integrity_state(self) -> tuple[str, str | None, str | None]:
+        """最近一次完整性结论：('ok'|问题描述|'pending', 时间, 方式)。"""
+        with self._health_lock:
+            if self._integrity is None:
+                return "pending", None, None
+            return self._integrity
+
+    def _start_integrity_check(self) -> None:
+        """进程内只跑一次的后台 quick_check：不阻塞任何请求（大库单次可达数秒）。"""
+        with self._health_lock:
+            if self._integrity_started or self._integrity is not None:
+                return
+            self._integrity_started = True
+
+        def work() -> None:
+            try:
+                con = dbmod.connect(self.paths.db)
+                try:
+                    verdict = dbmod.integrity(con, full=False)
+                finally:
+                    con.close()
+            except Exception as exc:  # noqa: BLE001
+                verdict = "error: %s: %s" % (type(exc).__name__, exc)
+            with self._health_lock:
+                if self._integrity is None:
+                    self._integrity = (verdict, _iso(), "quick_check")
+
+        threading.Thread(target=work, name="memora-integrity", daemon=True).start()
 
     def db_probe(self) -> tuple[bool, str | None]:
         try:
@@ -359,6 +484,8 @@ class Runtime:
             try:
                 workflows = self.module("workflows")
                 report["templates"] = workflows.seed_templates(store)
+                # 1.1.0：回收上次没收尾的运行/任务，并启动 job 消费者（关停见 graceful_shutdown）
+                report["background"] = workflows.start_background(store, self.gateway_or_none)
             except Exception as exc:  # noqa: BLE001
                 report["errors"].append("workflows: %s" % exc)
             try:
@@ -537,24 +664,32 @@ def methods_for(path: str) -> list[str]:
 # ============================================================ 健康与总览
 @route("/api/health", "GET")
 def api_health(rt: Runtime, req: Request):
+    """健康。默认便宜（不做完整性扫描，行数缓存几秒）；?lite=1 连行数也不数（桌面外壳的
+    就绪探针用）；?deep=1 同步跑完整 integrity_check。
+
+    1.0.0 每次调用都跑完整 integrity_check：211 MB 的库单次约 1.1 s，422 MB 约 2.9 s，
+    而桌面外壳的就绪探针超时是 1.5 s——库长到 ~0.4 GB 后应用就再也启动不了。
+    """
+    deep = req.qbool("deep")
+    lite = req.qbool("lite") and not deep
     capabilities = rt.capabilities()
     db_counts: dict = {}
     db_ok = False
     integrity = None
+    info: dict = {}
     try:
-        con = dbmod.connect(rt.paths.db)
-        try:
-            info = dbmod.health(con)
-        finally:
-            con.close()
-        db_ok = bool(info.get("ok"))
-        integrity = info.get("integrity")
-        for key in ("memory", "document", "chunk", "evidence", "edge", "entity",
-                    "workflow_run", "agent", "conflict", "job"):
-            value = (info.get("counts") or {}).get(key, -1)
-            db_counts[key] = None if value is None or value < 0 else value
+        info = rt.db_health(deep=deep, counts=not lite)
+        verdict, checked_at, mode = rt.integrity_state()
+        integrity = verdict
+        db_ok = bool(info.get("ok")) and verdict in ("ok", "pending")
+        if not lite:
+            for key in ("memory", "document", "chunk", "evidence", "edge", "entity",
+                        "workflow_run", "agent", "conflict", "job"):
+                value = (info.get("counts") or {}).get(key, -1)
+                db_counts[key] = None if value is None or value < 0 else value
     except Exception as exc:  # noqa: BLE001
         integrity = "error: %s" % exc
+        checked_at, mode = None, None
     health = rt.model_health()
     models = {role: {"ok": bool((info or {}).get("ok")),
                      "degraded": bool((info or {}).get("degraded", not (info or {}).get("ok"))),
@@ -574,6 +709,13 @@ def api_health(rt: Runtime, req: Request):
         "db": db_counts,
         "db_ok": db_ok,
         "db_integrity": integrity,
+        "db_integrity_mode": mode,
+        "db_integrity_checked_at": checked_at,
+        "db_tables": info.get("tables"),
+        "db_census": info.get("counts") if not lite else None,
+        "db_bytes": info.get("db_bytes"),
+        "schema_version": info.get("schema_version"),
+        "sqlite": info.get("sqlite"),
         "models": models,
         "degraded": sorted(set(degraded)),
         "unavailable": unavailable,
@@ -616,12 +758,17 @@ def api_overview(rt: Runtime, req: Request):
                 "ORDER BY c DESC LIMIT 20"
             ).fetchall()
         ]
-        since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 30 * 86400))
+        # 按**本地**日历日分桶（1.0.0 按 UTC 的前 10 个字符，和日记页、界面时间都对不上）。
+        # 先用 UTC 时间戳做范围过滤（走索引），再在 SQL 里换算本地日期。
+        out["today"] = dbmod.today()
+        first_day = time.strftime("%Y-%m-%d", time.localtime(time.time() - 29 * 86400))
+        since = _iso(time.time() - 31 * 86400)
         out["daily"] = [
             {"day": row["day"], "count": int(row["c"])}
             for row in con.execute(
-                "SELECT substr(recorded_at, 1, 10) AS day, count(*) AS c FROM memory "
-                "WHERE recorded_at >= ? GROUP BY day ORDER BY day", (since,)
+                "SELECT date(recorded_at, 'localtime') AS day, count(*) AS c FROM memory "
+                "WHERE recorded_at >= ? GROUP BY day HAVING day >= ? ORDER BY day",
+                (since, first_day)
             ).fetchall()
         ]
         out["pending_reviews"] = [
@@ -886,10 +1033,12 @@ def api_search(rt: Runtime, req: Request):
     limit = req.qint("limit", 20, 1, 200)
     budget = req.qint("budget", 0, 0, 100000) or None
     retrieval = rt.module("retrieval")
+    # 这是本机界面（人）的搜索：可以看到 sensitivity=secret 的记忆。
+    # agent 侧的 /api/recall、MCP 的 recall / search / digest 默认排除它们。
     result = retrieval.search(
         rt.store(), rt.gateway_or_none(), query,
         scope=req.q("scope"), limit=limit, strategy=strategy, budget=budget,
-        include_candidates=req.qbool("include_candidates"),
+        include_candidates=req.qbool("include_candidates"), include_secret=True,
     )
     result.setdefault("strategy", strategy)
     return result
@@ -1116,31 +1265,41 @@ def api_workflow_get(rt: Runtime, req: Request):
 
 @route("/api/workflows/{id}/run", "POST")
 def api_workflow_run(rt: Runtime, req: Request):
+    """运行模板。
+
+    默认同步：运行结束才返回 201 + run（1.0.0 的形状）。`?async=1` 或 body {"async": true}：
+    插入运行并交给有界运行池，**立即** 202 + run（status=queued|running，Location 指向
+    /api/runs/{id}）；进度看 SSE 的 run 事件（data.phase=queued/start/step/end）或轮询
+    GET /api/runs/{id}。可选 body.mode = fail（默认）| skip。
+    """
     tid = req.params["id"]
     body = req.json(require=False)
     inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
     scope = str(body.get("scope") or inputs.get("scope") or "global")
+    mode = str(body.get("mode") or "fail")
+    want_async = req.qbool("async") or body.get("async") in (True, 1, "1", "true", "yes")
     workflows = rt.module("workflows")
     store = rt.store()
-    emitter = eventbus.EventBus()
-    bus = eventbus.subscribe(("run",))
+    gw = rt.gateway_or_none()
     try:
-        run = workflows.run_workflow(store, rt.gateway_or_none(), tid, inputs,
-                                     scope=scope, trigger="api", emitter=emitter.put)
+        if want_async:
+            run = workflows.start_workflow(store, gw, tid, inputs, scope=scope, trigger="api",
+                                           mode=mode)
+        else:
+            run = workflows.run_workflow(store, gw, tid, inputs, scope=scope, trigger="api",
+                                         mode=mode)
+    except workflows.WorkflowNotFound:
+        raise ApiError(404, "工作流模板不存在：%s" % tid, "TEMPLATE_NOT_FOUND") from None
+    except ValueError as exc:
+        raise ApiError(400, "参数不合法：%s" % exc, "BAD_PARAM", {"param": "mode"}) from None
     except Exception as exc:  # noqa: BLE001
-        bus.close()
-        message = str(exc)
-        if "不存在" in message or "not found" in message.lower():
-            raise ApiError(404, "工作流模板不存在：%s" % tid, "TEMPLATE_NOT_FOUND") from None
-        raise ApiError(503, "工作流执行失败：%s" % message, "WORKFLOW_FAILED") from None
-    queued = bus.drain(limit=200)
-    bus.close()
-    _emit("run", {"run_id": run.get("id"), "template_id": tid,
-                  "status": run.get("status"), "scope": scope,
-                  "steps": len(run.get("steps") or [])})
-    if queued:
-        run = dict(run)
-        run["emitted"] = len(queued)
+        raise ApiError(503, "工作流执行失败：%s" % exc, "WORKFLOW_FAILED") from None
+    run = dict(run)
+    if want_async:
+        run["async"] = True
+        return Resp(run, status=202, headers={"Location": "/api/runs/%s" % run.get("id")})
+    # emitted：本次运行真正发布到事件总线的 run 事件数（1.0.0 数的是同时段全局的无关事件）
+    run["emitted"] = int(run.pop("events_published", 0) or 0)
     return Resp(run, status=201)
 
 
@@ -1164,13 +1323,20 @@ def api_run_get(rt: Runtime, req: Request):
 
 @route("/api/runs/{id}/cancel", "POST")
 def api_run_cancel(rt: Runtime, req: Request):
+    """请求取消：404 RUN_NOT_FOUND / 409 RUN_FINISHED（已结束，或取消生效前已跑完）/
+    200 已收尾为 cancelled / 202 请求已记下、执行器还在收尾（cancel_requested=true）。最多等 2 秒。"""
     workflows = rt.module("workflows")
+    rid = req.params["id"]
     try:
-        run = workflows.cancel_run(rt.store(), req.params["id"])
-    except Exception as exc:  # noqa: BLE001
-        raise ApiError(404, "取消失败：%s" % exc, "RUN_NOT_FOUND") from None
-    _emit("run", {"run_id": req.params["id"], "status": (run or {}).get("status", "cancelled"),
-                  "action": "cancel"})
+        run = workflows.cancel_run(rt.store(), rid)
+    except workflows.WorkflowNotFound:
+        raise ApiError(404, "运行记录不存在：%s" % rid, "RUN_NOT_FOUND") from None
+    except workflows.WorkflowConflict as exc:
+        raise ApiError(409, str(exc), "RUN_FINISHED", {"run_id": rid}) from None
+    run = dict(run)
+    if run.get("status") in ("queued", "running"):
+        run["cancel_requested"] = True
+        return Resp(run, status=202)
     return run
 
 
@@ -1218,12 +1384,19 @@ def api_models_upsert(rt: Runtime, req: Request):
     ref = str(body.get("api_key_ref") or ("model:%s" % pid))
     if api_key:
         hint = gw.set_secret(ref, api_key)
+    # 编辑已有档位时没带新密钥、也没提 api_key_ref：保留原来的引用。1.0.0 会把它写成 NULL，
+    # 改一下超时或模型名，已保存的密钥就和档位脱钩了。显式传 "api_key_ref": null 才是清除。
+    keep_ref = None
+    if not api_key and "api_key_ref" not in body:
+        existing = store.con.execute("SELECT api_key_ref FROM model_profile WHERE id = ?",
+                                     (pid,)).fetchone()
+        keep_ref = existing[0] if existing is not None else None
     row = {
         "id": pid, "role": role, "label": str(body.get("label") or pid),
         "provider": str(body.get("provider") or "openai-compatible"),
         "model": str(body["model"]),
         "base_url": body.get("base_url"),
-        "api_key_ref": ref if (api_key or body.get("api_key_ref")) else None,
+        "api_key_ref": ref if (api_key or body.get("api_key_ref")) else keep_ref,
         "dim": body.get("dim"), "batch": int(body.get("batch") or 16),
         "timeout_ms": int(body.get("timeout_ms") or 60000),
         "params": dbmod.dumps(params), "priority": int(body.get("priority") or 0),
@@ -1367,6 +1540,19 @@ def api_conflicts(rt: Runtime, req: Request):
                               "LIMIT ? OFFSET ?", (limit, offset), limit)
     for row in rows:
         row["detail"] = _json_field(row, "detail", {})
+    # 附带两侧记忆的标题（附加字段）：界面不必再为每条冲突各发两次 GET /api/memories/{id}
+    ids = sorted({str(r.get(k)) for r in rows for k in ("a_id", "b_id") if r.get(k)})
+    titles: dict[str, str] = {}
+    if ids:
+        try:
+            marks = ",".join("?" * len(ids))
+            titles = {str(r[0]): str(r[1] or "") for r in rt.store().con.execute(
+                "SELECT id, title FROM memory WHERE id IN (%s)" % marks, tuple(ids)).fetchall()}
+        except Exception:  # noqa: BLE001
+            titles = {}
+    for row in rows:
+        row["a_title"] = titles.get(str(row.get("a_id")))
+        row["b_title"] = titles.get(str(row.get("b_id")))
     total = 0
     try:
         con = rt.store().con
@@ -1396,28 +1582,28 @@ def api_jobs(rt: Runtime, req: Request):
                       (limit, offset), limit)
     for row in rows:
         row["payload"] = _json_field(row, "payload", {})
+    try:  # 1.1.0：job 消费者是否在跑（只有 serve 启动的服务进程会启动它）
+        worker = rt.module("workflows").job_worker_status(rt.paths.db)
+    except Exception as exc:  # noqa: BLE001
+        worker = {"running": False, "error": str(exc)[:200]}
     return {"items": rows, "total": len(rows), "limit": limit, "offset": offset,
-            "by_status": _count_by(rows, "status")}
+            "by_status": _count_by(rows, "status"), "worker": worker}
 
 
 @route("/api/jobs/{id}/retry", "POST")
 def api_jobs_retry(rt: Runtime, req: Request):
+    """重新排队一个任务（attempts 归零、立即到期）；正在执行的任务 409 JOB_RUNNING。
+    只写一条 job.retry 审计（1.0.0 写了两条）。"""
     job_id = req.params["id"]
-    store = rt.store()
-    con = store.con
-    row = con.execute("SELECT * FROM job WHERE id = ?", (job_id,)).fetchone()
-    if row is None:
-        raise ApiError(404, "任务不存在：%s" % job_id, "JOB_NOT_FOUND")
-    stamp = _iso()
-    with store._txn() as conn:
-        conn.execute("UPDATE job SET status = 'queued', run_after = ?, last_error = NULL, "
-                     "updated_at = ? WHERE id = ?", (stamp, stamp, job_id))
-        conn.execute(
-            "INSERT INTO audit(id, at, actor, action, target, detail) VALUES(?,?,?,?,?,?)",
-            ("a-" + os.urandom(6).hex(), stamp, "api", "job.retry", job_id, "{}"))
-    _audit(rt, "job.retry", job_id, {"previous": row["status"]})
+    workflows = rt.module("workflows")
+    try:
+        result = workflows.retry_job(rt.store(), job_id)
+    except workflows.WorkflowNotFound:
+        raise ApiError(404, "任务不存在：%s" % job_id, "JOB_NOT_FOUND") from None
+    except workflows.WorkflowConflict as exc:
+        raise ApiError(409, str(exc), "JOB_RUNNING", {"job_id": job_id}) from None
     _emit("log", {"action": "job_retry", "job_id": job_id})
-    return {"ok": True, "job_id": job_id, "status": "queued", "requeued_at": stamp}
+    return result
 
 
 @route("/api/exchange/export", "GET")
@@ -1425,7 +1611,9 @@ def api_exchange_export(rt: Runtime, req: Request):
     exchange = rt.module("exchange")
     scope = req.q("scope") or None
     status = req.q("status") or "approved"
-    text = exchange.export_jsonl(rt.store(), scope=scope, status=status)
+    # secret 记忆默认不导出；本机界面的人可以显式要（include_secret=1）
+    text = exchange.export_jsonl(rt.store(), scope=scope, status=status,
+                                 include_secret=req.qbool("include_secret"))
     if str(req.q("format") or "").lower() == "json":
         return {"schema": getattr(exchange, "EXCHANGE_SCHEMA", "memora-exchange/1"),
                 "scope": scope, "status": status,
@@ -1447,8 +1635,13 @@ def api_exchange_import(rt: Runtime, req: Request):
             parsed = json.loads(stripped)
         except ValueError:
             parsed = None
-        if isinstance(parsed, dict) and not parsed.get("schema") == "JSONRPC":
-            body = parsed if ("jsonl" in parsed or "records" in parsed) else {}
+        # 包装对象：{jsonl|text|records, scope, agent, dry_run, trust}。界面发的就是 {text, scope}；
+        # 1.0.0 只认 jsonl/records，界面的导入因此被当成"一条记录"，整份 JSONL 成了一条记忆。
+        # 带 schema 字段、又没有 jsonl/records 的对象是一条交换记录本身，不是包装。
+        if isinstance(parsed, dict):
+            is_wrapper = ("jsonl" in parsed or "records" in parsed
+                          or ("schema" not in parsed and isinstance(parsed.get("text"), str)))
+            body = parsed if is_wrapper else {}
     payload = body.get("jsonl") or body.get("text")
     if payload is None and body.get("records") is not None:
         payload = "\n".join(json.dumps(r, ensure_ascii=False)
@@ -1459,9 +1652,14 @@ def api_exchange_import(rt: Runtime, req: Request):
         raise ApiError(400, "导入内容为空", "EMPTY_BODY")
     scope = str(body.get("scope") or req.q("scope") or "global")
     agent_id = body.get("agent") or body.get("agent_id")
-    result = exchange.import_jsonl(rt.store(), str(payload), agent_id=agent_id,
-                                   scope=scope,
-                                   dry_run=bool(body.get("dry_run")))
+    # 默认 cap（导入文件不受信）；"preserve" = 人要求原样恢复自己的备份（ADR-0002）
+    trust = str(body.get("trust") or req.q("trust") or "cap")
+    try:
+        result = exchange.import_jsonl(rt.store(), str(payload), agent_id=agent_id,
+                                       scope=scope, dry_run=bool(body.get("dry_run")),
+                                       trust=trust)
+    except ValueError as exc:
+        raise ApiError(400, str(exc), "BAD_TRUST_POLICY") from None
     _emit("memory", {"action": "exchange_import", "scope": scope,
                      "result": {k: result[k] for k in list(result)[:5]}})
     return result
@@ -1513,6 +1711,13 @@ def api_mcp(rt: Runtime, req: Request):
         raise ApiError(500, "MCP 调用失败：%s" % exc, "MCP_ERROR") from None
     if result is None:
         return Resp({"ok": True, "accepted": True}, status=202)
+    # agent 经 MCP 写入后通知界面（1.0.0 只有 HTTP 写接口发事件，界面对 agent 写入一直是旧的）
+    if (isinstance(body, dict) and body.get("method") == "tools/call"
+            and isinstance(result, dict) and "error" not in result):
+        params = body.get("params") if isinstance(body.get("params"), dict) else {}
+        tool = str(params.get("name") or "")
+        if tool in getattr(mcp_mod, "WRITE_TOOLS", ()):
+            _emit("memory", {"action": "mcp", "tool": tool, "source": "mcp-http"})
     return result
 
 
@@ -1577,6 +1782,19 @@ class MemoraHandler(BaseHTTPRequestHandler):
 
     def log_error(self, fmt: str, *args: Any) -> None:  # noqa: D102
         self.log_message(fmt, *args)
+
+    def finish(self) -> None:  # noqa: D102
+        try:
+            super().finish()
+        finally:
+            # 这个线程只服务这一个 TCP 连接：它打开的 sqlite 连接随之关闭
+            store = getattr(self.runtime, "_store", None)
+            release = getattr(store, "release_thread", None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:  # noqa: BLE001
+                    pass
 
     # -- HTTP 方法 ------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
@@ -1656,6 +1874,26 @@ class MemoraHandler(BaseHTTPRequestHandler):
                    "127.0.0.1", "localhost", "[::1]"}
         return host in allowed
 
+    def _origin_ok(self) -> bool:
+        """跨站写请求闸门（CSRF）。
+
+        浏览器发出的非 GET 请求一定带 Origin（新浏览器还带 Sec-Fetch-Site）。来源不是
+        本服务自己的回环源就拒绝。1.0.0 只靠"写操作必须是 application/json"挡跨站，
+        但 multipart/form-data 和空 body 的 POST 都是 CORS「简单请求」，浏览器不预检、
+        直接发出——任何网页都能导入记忆、批准候选、跑工作流（tests/test_security.py）。
+        agent、curl、MCP 宿主等非浏览器客户端不带这两个头，照常放行。
+        """
+        site = str(self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site == "cross-site":
+            return False
+        origin = str(self.headers.get("Origin") or "").strip().lower()
+        if not origin:
+            return True
+        port = getattr(self.runtime, "port", DEFAULT_PORT)
+        allowed = {"http://127.0.0.1:%d" % port, "http://localhost:%d" % port,
+                   "http://[::1]:%d" % port}
+        return origin in allowed
+
     # -- API 分发 -------------------------------------------------
     def _dispatch_api(self, method: str, path: str, query: str) -> None:
         rt = self.runtime
@@ -1681,13 +1919,23 @@ class MemoraHandler(BaseHTTPRequestHandler):
         if path == "/api/events" and method in ("GET", "HEAD"):
             self._serve_events(Request(method, path, query, self.headers, params, b"", rt))
             return
+        if method in ("POST", "PUT", "PATCH", "DELETE") and not self._origin_ok():
+            # 先把请求体读掉（有上限），否则客户端还在发送时连接被关，它收到的是 RST 而不是 403
+            try:
+                self._drain(int(self.headers.get("Content-Length") or 0))
+            except ValueError:
+                pass
+            self.close_connection = True
+            raise ApiError(403, "拒绝跨站写请求：Origin 不是本服务的回环地址", "BAD_ORIGIN")
         body = b""
         if method in ("POST", "PUT", "PATCH"):
             ctype = str(self.headers.get("Content-Type") or "").lower()
             has_body = self.headers.get("Content-Length") not in (None, "0")
             if has_body:
                 is_json = ctype.startswith("application/json")
-                is_form = ctype.startswith("multipart/form-data") and path.endswith("/import")
+                # 只有文档上传真的解析 multipart；1.0.0 对所有 */import 放行，交换导入也在内。
+                is_form = (ctype.startswith("multipart/form-data")
+                           and path == "/api/documents/import")
                 if not (is_json or is_form):
                     raise ApiError(400, "写操作必须使用 Content-Type: application/json",
                                    "BAD_CONTENT_TYPE")
@@ -1758,12 +2006,34 @@ class MemoraHandler(BaseHTTPRequestHandler):
         rt.static_hits += 1
         suffix_type = content_type or CONTENT_TYPES.get(target.suffix.lower(),
                                                         "application/octet-stream")
-        headers = {"X-Static-Path": target.name}
+        # 静态资源可以安全缓存：no-cache + ETag 重新验证（文件名不带版本，所以不能 immutable）。
+        # 1.0.0 一律 no-store、无 ETag、每次重读重压：katex.css 单次 gzip 约 68 ms，
+        # 每次刷新重传约 1 MB。现在没变就 304，压缩结果按 (路径, mtime, 大小) 缓存。
+        stat = target.stat()
+        etag = 'W/"%x-%x"' % (stat.st_size, stat.st_mtime_ns)
+        headers = {"X-Static-Path": target.name, "ETag": etag, "Cache-Control": "no-cache"}
+        if etag in [t.strip() for t in str(self.headers.get("If-None-Match") or "").split(",")]:
+            self._send_headers(304, suffix_type, 0, headers)
+            return
+        compressible = target.suffix.lower() not in (".png", ".ico", ".woff2")
+        wants_gzip = "gzip" in str(self.headers.get("Accept-Encoding") or "").lower()
+        if compressible and wants_gzip and len(data) >= GZIP_MIN_BYTES:
+            key = (str(target), stat.st_mtime_ns, stat.st_size)
+            with rt._health_lock:
+                packed = rt.gzip_cache.get(key)
+            if packed is None:
+                packed = gzip.compress(data, compresslevel=6)
+                with rt._health_lock:
+                    rt.gzip_cache[key] = packed
+            self._send_headers(200, suffix_type, len(packed), headers, encoded=True, vary=True)
+            if method != "HEAD":
+                self.wfile.write(packed)
+            return
         if method == "HEAD":
             self._send_headers(200, suffix_type, len(data), headers)
             return
         self._send_bytes(200, data, content_type=suffix_type, extra_headers=headers,
-                         compress=target.suffix.lower() not in (".png", ".ico", ".woff2"))
+                         compress=compressible)
 
     # -- SSE ------------------------------------------------------
     def _serve_events(self, req: Request) -> None:
@@ -1772,6 +2042,7 @@ class MemoraHandler(BaseHTTPRequestHandler):
         raw_types = req.q("types") or req.q("type")
         if raw_types:
             types = tuple(t.strip() for t in str(raw_types).split(",") if t.strip())
+        rt.start_change_watcher()
         bus = eventbus.subscribe(types)
         rt.sse_clients += 1
         deadline = time.monotonic() + SSE_MAX_LIFETIME
@@ -1861,19 +2132,23 @@ class MemoraHandler(BaseHTTPRequestHandler):
     def _send_headers(self, status: int, content_type: str, length: int,
                       extra_headers: dict | None = None, close: bool = False,
                       encoded: bool = False, vary: bool = False) -> None:
+        # 调用方给的同名头覆盖默认值（大小写不敏感）。1.0.0 会把 Content-Type、Cache-Control
+        # 各发两遍（/raw、NDJSON 导出）。
+        merged: dict[str, tuple[str, str]] = {k.lower(): (k, v) for k, v in SECURITY_HEADERS.items()}
+        merged["content-type"] = ("Content-Type", content_type)
+        for key, value in (extra_headers or {}).items():
+            merged[str(key).lower()] = (str(key), str(value))
         self.send_response_only(status)
         self.send_header("Date", self.date_time_string())
         self.send_header("Server", self.version_string())
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(max(0, length)))
+        if status != 304:
+            self.send_header("Content-Length", str(max(0, length)))
         if encoded:
             self.send_header("Content-Encoding", "gzip")
         if vary:
             self.send_header("Vary", "Accept-Encoding")
-        for key, value in SECURITY_HEADERS.items():
+        for key, value in merged.values():
             self.send_header(key, value)
-        for key, value in (extra_headers or {}).items():
-            self.send_header(str(key), str(value))
         if close or getattr(self, "close_connection", False):
             self.send_header("Connection", "close")
             self.close_connection = True
@@ -1980,7 +2255,11 @@ def serve(paths: Paths, port: int = DEFAULT_PORT, host: str = DEFAULT_HOST,
     except OSError as exc:
         print("数据目录不可用：%s" % exc, flush=True)
         return 2
-    dbmod.init_db(paths.db)                      # 启动前初始化数据库（幂等）
+    try:
+        dbmod.init_db(paths.db)                  # 启动前建库 / 迁移（ADR-0004）
+    except dbmod.SchemaTooNew as exc:
+        print("拒绝启动：%s" % exc, flush=True)
+        return 3
     rt = Runtime(paths)
     report = rt.bootstrap()                      # 内置模板/智能体/算法（失败不阻塞）
     try:
@@ -1993,6 +2272,7 @@ def serve(paths: Paths, port: int = DEFAULT_PORT, host: str = DEFAULT_HOST,
     if report.get("errors"):
         rt.log_line("bootstrap warnings: %s" % "; ".join(report["errors"]))
     _emit("system", {"action": "serve_start", "url": url, "version": VERSION})
+    rt.start_inbox_watcher()
     if open_ui:
         threading.Thread(target=_open_browser, args=(url,), daemon=True).start()
     try:
@@ -2016,6 +2296,10 @@ def graceful_shutdown(httpd: MemoraHTTPServer, rt: Runtime, timeout: float = 5.0
     rt.shutdown.set()
     try:
         httpd.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # 1.1.0：停 job 消费者，请求取消本库仍在执行的运行（在节点边界收尾为 cancelled）
+        rt.module("workflows").stop_background(rt.paths.db, timeout=min(3.0, float(timeout)))
     except Exception:  # noqa: BLE001
         pass
     deadline = time.monotonic() + max(0.0, float(timeout))
